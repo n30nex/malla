@@ -1110,13 +1110,48 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
             via_mqtt_str = (
                 " (via MQTT)" if getattr(mesh_packet, "via_mqtt", False) else ""
             )
+            try:
+                map_report = mqtt_pb2.MapReport()
+                map_report.ParseFromString(mesh_packet.decoded.payload)
 
-            # Log MAP_REPORT packet (protobuf structure may not be available)
-            logging.info(
-                f"🗺️ MAP_REPORT from {from_node_display}{via_mqtt_str}: {len(mesh_packet.decoded.payload)} bytes"
-            )
+                lat = map_report.latitude_i / 1e7
+                lon = map_report.longitude_i / 1e7
+                alt = map_report.altitude
 
-            processed_successfully = True
+                # Update node cache with info from map report
+                hw_model_str = mesh_pb2.HardwareModel.Name(map_report.hw_model).replace(
+                    "UNSET", "Unknown"
+                )
+                update_node_cache(
+                    node_id=from_node_id_numeric,
+                    hex_id=f"!{from_node_id_numeric:08x}",
+                    long_name=map_report.long_name,
+                    short_name=map_report.short_name,
+                    hw_model=hw_model_str,
+                    role=config_pb2.Config.DeviceConfig.Role.Name(map_report.role),
+                )
+
+                logging.info(
+                    f"🗺️ MAP_REPORT from {from_node_display}{via_mqtt_str}: {lat:.5f}, {lon:.5f} (alt: {alt}m), re-logging as POSITION_APP"
+                )
+
+                # Create a synthetic Position payload
+                position_data = mesh_pb2.Position(
+                    latitude_i=map_report.latitude_i,
+                    longitude_i=map_report.longitude_i,
+                    altitude=map_report.altitude,
+                )
+                
+                # Overwrite the decoded data to look like a POSITION_APP packet
+                mesh_packet.decoded.portnum = portnums_pb2.PortNum.POSITION_APP
+                mesh_packet.decoded.payload = position_data.SerializeToString()
+
+                processed_successfully = True
+
+            except Exception as e:
+                logging.warning(f"Could not parse MapReport: {e}")
+                # Log the original MAP_REPORT packet even if parsing fails
+                processed_successfully = True
 
         else:
             port_name = portnums_pb2.PortNum.Name(mesh_packet.decoded.portnum)
