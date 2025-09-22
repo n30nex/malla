@@ -1,7 +1,7 @@
 # Malla
 
 Malla (_Mesh_, in Spanish) is an ([AI-built](./AI.md)) tool that logs Meshtastic packets from an MQTT broker into a SQLite database and exposes a web UI to get some interesting data insights from them.
-
+Fork: We added Map Report packets to the data (as this is the most used way for map data to enter MQTT)
 ## Running Instances
 Check out some instances with running data from community MQTT servers:
 - meshtastic.es (Spain): https://malla.meshtastic.es
