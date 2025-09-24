@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -40,10 +40,24 @@
             color: #6c757d;
             font-size: 0.9rem;
         }
+
+        /* Dark mode metric styles */
+        [data-bs-theme=dark] .metric-value {
+            color: var(--bs-primary);
+        }
+        [data-bs-theme=dark] .metric-label {
+            color: var(--bs-secondary-color);
+        }
         .signal-excellent { color: #198754; }
         .signal-good { color: #ffc107; }
         .signal-fair { color: #fd7e14; }
         .signal-poor { color: #dc3545; }
+
+        /* Dark mode signal indicators */
+        [data-bs-theme=dark] .signal-excellent { color: var(--bs-success); }
+        [data-bs-theme=dark] .signal-good { color: var(--bs-warning); }
+        [data-bs-theme=dark] .signal-fair { color: #fd7e14; }
+        [data-bs-theme=dark] .signal-poor { color: var(--bs-danger); }
         .table-responsive {
             max-height: 70vh;
         }
@@ -53,6 +67,12 @@
             border-top: 1px solid #dee2e6;
             color: #6c757d;
             text-align: center;
+        }
+
+        /* Dark mode footer */
+        [data-bs-theme=dark] .footer {
+            border-top: 1px solid var(--bs-border-color);
+            color: var(--bs-secondary-color);
         }
 
         /* Node tooltip styles */
@@ -66,6 +86,15 @@
             color: #0a58ca;
         }
 
+        /* Dark mode node links */
+        [data-bs-theme=dark] .node-link {
+            color: var(--bs-primary);
+        }
+
+        [data-bs-theme=dark] .node-link:hover {
+            color: color-mix(in srgb, var(--bs-primary) 85%, white);
+        }
+
         .tooltip.bs-tooltip-top .tooltip-inner,
         .tooltip.bs-tooltip-bottom .tooltip-inner {
             max-width: 300px;
@@ -73,6 +102,14 @@
             background-color: #212529;
             border-radius: 0.375rem;
             padding: 0.75rem;
+        }
+
+        /* Dark mode tooltips */
+        [data-bs-theme=dark] .tooltip.bs-tooltip-top .tooltip-inner,
+        [data-bs-theme=dark] .tooltip.bs-tooltip-bottom .tooltip-inner {
+            background-color: var(--bs-tertiary-bg);
+            color: var(--bs-body-color);
+            border: 1px solid var(--bs-border-color);
         }
 
         .node-tooltip-content {
@@ -99,9 +136,34 @@
             color: #fff;
         }
 
+        /* Dark mode tooltip content */
+        [data-bs-theme=dark] .node-tooltip-header {
+            color: var(--bs-body-color);
+        }
+
+        [data-bs-theme=dark] .node-tooltip-label {
+            color: var(--bs-secondary-color);
+        }
+
+        [data-bs-theme=dark] .node-tooltip-value {
+            color: var(--bs-body-color);
+        }
+
         .table-responsive {
             height: 100%;
             max-height: 100%;
+        }
+
+        /* Dark mode theme toggle button */
+        [data-bs-theme=dark] .btn-outline-light {
+            color: var(--bs-body-color);
+            border-color: var(--bs-border-color);
+        }
+
+        [data-bs-theme=dark] .btn-outline-light:hover {
+            background-color: var(--bs-secondary-bg);
+            border-color: var(--bs-border-color);
+            color: var(--bs-body-color);
         }
     </style>
 
@@ -112,7 +174,7 @@
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary" style="z-index: 1040;">
         <div class="container">
             <a class="navbar-brand" href="{{ url_for('main.dashboard') }}">
-                <i class="bi bi-radio"></i> {{ APP_NAME }}
+                📻 Candaverse MQTT
             </a>
 
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
@@ -186,6 +248,15 @@
                                 </a>
                             </li>
                         </ul>
+                    </li>
+                </ul>
+
+                <!-- Theme toggle and user controls -->
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <button class="btn btn-outline-light btn-sm" id="themeToggle" title="Toggle theme">
+                            <i class="bi bi-moon-fill" id="themeIcon"></i>
+                        </button>
                     </li>
                 </ul>
             </div>
@@ -370,6 +441,41 @@
 
         // Make reinitializeTooltips available globally for dynamic content
         window.reinitializeTooltips = reinitializeTooltips;
+    </script>
+
+    <!-- Theme toggle functionality -->
+    <script>
+        // Theme toggle functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const themeToggle = document.getElementById('themeToggle');
+            const themeIcon = document.getElementById('themeIcon');
+            const html = document.documentElement;
+
+            // Load saved theme preference or default to dark
+            const savedTheme = localStorage.getItem('theme') || 'dark';
+            html.setAttribute('data-bs-theme', savedTheme);
+            updateThemeIcon(savedTheme);
+
+            // Theme toggle click handler
+            themeToggle.addEventListener('click', function() {
+                const currentTheme = html.getAttribute('data-bs-theme');
+                const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+                html.setAttribute('data-bs-theme', newTheme);
+                localStorage.setItem('theme', newTheme);
+                updateThemeIcon(newTheme);
+            });
+
+            function updateThemeIcon(theme) {
+                if (theme === 'dark') {
+                    themeIcon.className = 'bi bi-moon-fill';
+                    themeToggle.title = 'Switch to light mode';
+                } else {
+                    themeIcon.className = 'bi bi-sun-fill';
+                    themeToggle.title = 'Switch to dark mode';
+                }
+            }
+        });
     </script>
 
     {% block extra_js %}{% endblock %}

@@ -210,6 +210,11 @@
     z-index: 1;
 }
 
+/* Dark mode map container */
+[data-bs-theme=dark] .map-container {
+    background: var(--bs-body-bg);
+}
+
 .map-main {
     flex: 1;
     position: relative;
@@ -234,6 +239,17 @@
     align-items: center;
     background: rgba(248, 249, 250, 0.9);
     z-index: 100;
+}
+
+/* Dark mode loading and error overlays */
+[data-bs-theme=dark] .loading-overlay {
+    background: rgba(13, 17, 23, 0.9);
+    color: var(--bs-body-color);
+}
+
+[data-bs-theme=dark] .error-overlay {
+    background: rgba(13, 17, 23, 0.9);
+    color: var(--bs-danger);
 }
 
 .error-overlay {
@@ -269,6 +285,21 @@
     border-color: #0d6efd;
 }
 
+/* Dark mode node list items */
+[data-bs-theme=dark] .node-list-item {
+    border: 1px solid var(--bs-border-color);
+    color: var(--bs-body-color);
+}
+
+[data-bs-theme=dark] .node-list-item:hover {
+    background-color: var(--bs-secondary-bg);
+}
+
+[data-bs-theme=dark] .node-list-item.selected {
+    background-color: rgba(var(--bs-primary-rgb), 0.2);
+    border-color: var(--bs-primary);
+}
+
 .signal-indicator {
     display: inline-block;
     width: 12px;
@@ -296,6 +327,22 @@
 .age-recent { background-color: #fff3cd; color: #664d03; }
 .age-old { background-color: #f8d7da; color: #721c24; }
 
+/* Dark mode age indicators */
+[data-bs-theme=dark] .age-fresh {
+    background-color: rgba(63, 185, 80, 0.2);
+    color: #3fb950;
+}
+
+[data-bs-theme=dark] .age-recent {
+    background-color: rgba(210, 153, 34, 0.2);
+    color: #d29922;
+}
+
+[data-bs-theme=dark] .age-old {
+    background-color: rgba(248, 81, 73, 0.2);
+    color: #f85149;
+}
+
 .traceroute-link-info {
     font-size: 0.9rem;
     min-width: 250px;
@@ -306,6 +353,16 @@
     border-bottom: 1px solid #dee2e6;
     padding-bottom: 0.25rem;
     margin-bottom: 0.5rem;
+}
+
+/* Dark mode traceroute link info */
+[data-bs-theme=dark] .traceroute-link-info {
+    color: var(--bs-body-color);
+}
+
+[data-bs-theme=dark] .traceroute-link-info .fw-bold {
+    color: var(--bs-primary);
+    border-bottom: 1px solid var(--bs-border-color);
 }
 
 /* Custom marker cluster styles */
@@ -330,6 +387,31 @@
     background-color: rgba(241, 128, 23, 0.6);
 }
 
+/* Dark mode marker cluster styles */
+[data-bs-theme=dark] .marker-cluster-small {
+    background-color: rgba(47, 129, 247, 0.6);
+}
+[data-bs-theme=dark] .marker-cluster-small div {
+    background-color: rgba(47, 129, 247, 0.8);
+    color: #fff;
+}
+
+[data-bs-theme=dark] .marker-cluster-medium {
+    background-color: rgba(88, 166, 255, 0.6);
+}
+[data-bs-theme=dark] .marker-cluster-medium div {
+    background-color: rgba(88, 166, 255, 0.8);
+    color: #fff;
+}
+
+[data-bs-theme=dark] .marker-cluster-large {
+    background-color: rgba(248, 81, 73, 0.6);
+}
+[data-bs-theme=dark] .marker-cluster-large div {
+    background-color: rgba(248, 81, 73, 0.8);
+    color: #fff;
+}
+
 /* Custom node marker styles */
 .custom-node-marker {
     background: transparent !important;
@@ -352,6 +434,12 @@
     text-shadow: 0 1px 2px rgba(0,0,0,0.5);
     cursor: pointer;
     transition: transform 0.2s ease;
+}
+
+/* Dark mode node marker container */
+[data-bs-theme=dark] .node-marker-container {
+    border: 2px solid var(--bs-body-bg);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.5);
 }
 
 .node-marker-container:hover {
@@ -626,8 +714,8 @@ function initMap() {
     // Create map centered on a default location (will be updated when data loads)
     map = L.map('map').setView([40.0, -95.0], 4);
 
-    // Add Carto Positron tiles
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    // Add Carto Dark Matter tiles for dark mode
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
         subdomains: 'abcd',
         maxZoom: 20

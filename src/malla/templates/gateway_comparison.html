@@ -10,12 +10,12 @@
         padding: 1.5rem;
         margin-bottom: 2rem;
     }
-    
+
     .chart-container {
         height: 400px;
         margin-bottom: 2rem;
     }
-    
+
     .stats-card {
         background: #fff;
         border: 1px solid #dee2e6;
@@ -23,7 +23,24 @@
         padding: 1.5rem;
         margin-bottom: 1rem;
     }
-    
+
+    /* Dark mode stats card */
+    [data-bs-theme=dark] .stats-card {
+        background: var(--bs-tertiary-bg);
+        border: 1px solid var(--bs-border-color);
+    }
+
+    /* Dark mode comparison card */
+    [data-bs-theme=dark] .card {
+        background: var(--bs-tertiary-bg);
+        border: 1px solid var(--bs-border-color);
+    }
+
+    [data-bs-theme=dark] .card-body {
+        background: var(--bs-tertiary-bg);
+        color: var(--bs-body-color);
+    }
+
     .stat-row {
         display: flex;
         justify-content: space-between;
@@ -31,33 +48,43 @@
         padding: 0.5rem 0;
         border-bottom: 1px solid #f1f3f4;
     }
-    
+
     .stat-row:last-child {
         border-bottom: none;
     }
-    
+
     .stat-label {
         font-weight: 500;
         color: #495057;
     }
-    
+
+    /* Dark mode stat labels */
+    [data-bs-theme=dark] .stat-label {
+        color: var(--bs-body-color);
+    }
+
     .stat-value {
         font-weight: bold;
         color: #212529;
     }
-    
+
+    /* Dark mode stat values */
+    [data-bs-theme=dark] .stat-value {
+        color: var(--bs-body-color);
+    }
+
     .positive-diff {
         color: #198754;
     }
-    
+
     .negative-diff {
         color: #dc3545;
     }
-    
+
     .neutral-diff {
         color: #6c757d;
     }
-    
+
     .gateway-badge {
         display: inline-block;
         padding: 0.25rem 0.5rem;
@@ -65,14 +92,25 @@
         font-size: 0.875rem;
         font-weight: 500;
     }
-    
+
     .gateway1-badge {
         background-color: #e3f2fd;
         color: #1976d2;
     }
-    
+
     .gateway2-badge {
         background-color: #f3e5f5;
+        color: #7b1fa2;
+    }
+
+    /* Dark mode gateway badges */
+    [data-bs-theme=dark] .gateway1-badge {
+        background-color: rgba(47, 129, 247, 0.2);
+        color: var(--bs-primary);
+    }
+
+    [data-bs-theme=dark] .gateway2-badge {
+        background-color: rgba(123, 31, 162, 0.2);
         color: #7b1fa2;
     }
 </style>
@@ -101,13 +139,13 @@
                     {% endfor %}
                 </select>
             </div>
-            
+
             <div class="col-md-2 text-center d-flex align-items-end">
                 <div class="w-100">
                     <strong>VS</strong>
                 </div>
             </div>
-            
+
             <div class="col-md-5">
                 <label for="gateway2" class="form-label">Gateway 2</label>
                 <select class="form-select" id="gateway2" name="gateway2" required>
@@ -120,17 +158,17 @@
                 </select>
             </div>
         </div>
-        
+
         <!-- Optional Filters -->
         <div class="row mt-3">
             <div class="col-md-3">
                 <label for="start_time" class="form-label">Start Time</label>
-                <input type="datetime-local" class="form-control" id="start_time" name="start_time" 
+                <input type="datetime-local" class="form-control" id="start_time" name="start_time"
                        value="{{ filters.start_time if filters.start_time }}">
             </div>
             <div class="col-md-3">
                 <label for="end_time" class="form-label">End Time</label>
-                <input type="datetime-local" class="form-control" id="end_time" name="end_time" 
+                <input type="datetime-local" class="form-control" id="end_time" name="end_time"
                        value="{{ filters.end_time if filters.end_time }}">
             </div>
             <div class="col-md-3">
@@ -165,7 +203,7 @@
     <div class="col-12">
         <h2>Comparison Results</h2>
         <p>
-            Comparing <span class="gateway-badge gateway1-badge">{{ comparison_data.gateway1_name }}</span> 
+            Comparing <span class="gateway-badge gateway1-badge">{{ comparison_data.gateway1_name }}</span>
             vs <span class="gateway-badge gateway2-badge">{{ comparison_data.gateway2_name }}</span>
         </p>
     </div>
@@ -176,12 +214,12 @@
     <div class="col-md-6">
         <div class="stats-card">
             <h5><i class="bi bi-bar-chart"></i> Signal Statistics</h5>
-            
+
             <div class="stat-row">
                 <span class="stat-label">Common Packets</span>
                 <span class="stat-value">{{ comparison_data.statistics.total_common_packets }}</span>
             </div>
-            
+
             {% if comparison_data.statistics.get('rssi_diff_avg') is not none %}
             <div class="stat-row">
                 <span class="stat-label">Avg RSSI Difference</span>
@@ -190,7 +228,7 @@
                 </span>
             </div>
             {% endif %}
-            
+
             {% if comparison_data.statistics.get('snr_diff_avg') is not none %}
             <div class="stat-row">
                 <span class="stat-label">Avg SNR Difference</span>
@@ -201,32 +239,32 @@
             {% endif %}
         </div>
     </div>
-    
+
     <div class="col-md-6">
         <div class="stats-card">
             <h5><i class="bi bi-router"></i> Gateway Performance</h5>
-            
+
             {% if comparison_data.statistics.get('gateway1_rssi_avg') is not none %}
             <div class="stat-row">
                 <span class="stat-label">{{ comparison_data.gateway1_name }} Avg RSSI</span>
                 <span class="stat-value">{{ "%.1f"|format(comparison_data.statistics.gateway1_rssi_avg) }} dBm</span>
             </div>
             {% endif %}
-            
+
             {% if comparison_data.statistics.get('gateway2_rssi_avg') is not none %}
             <div class="stat-row">
                 <span class="stat-label">{{ comparison_data.gateway2_name }} Avg RSSI</span>
                 <span class="stat-value">{{ "%.1f"|format(comparison_data.statistics.gateway2_rssi_avg) }} dBm</span>
             </div>
             {% endif %}
-            
+
             {% if comparison_data.statistics.get('gateway1_snr_avg') is not none %}
             <div class="stat-row">
                 <span class="stat-label">{{ comparison_data.gateway1_name }} Avg SNR</span>
                 <span class="stat-value">{{ "%.1f"|format(comparison_data.statistics.gateway1_snr_avg) }} dB</span>
             </div>
             {% endif %}
-            
+
             {% if comparison_data.statistics.get('gateway2_snr_avg') is not none %}
             <div class="stat-row">
                 <span class="stat-label">{{ comparison_data.gateway2_name }} Avg SNR</span>
@@ -249,7 +287,7 @@
             </div>
         </div>
     </div>
-    
+
     <div class="col-md-6">
         <div class="card">
             <div class="card-header">
@@ -273,7 +311,7 @@
             </div>
         </div>
     </div>
-    
+
     <div class="col-md-6">
         <div class="card">
             <div class="card-header">
@@ -602,4 +640,4 @@ $(document).ready(function() {
 });
 </script>
 {% endif %}
-{% endblock %} 
+{% endblock %}

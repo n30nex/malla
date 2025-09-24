@@ -15,6 +15,25 @@
     box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
 }
 
+/* Dark mode support for modern table components */
+[data-bs-theme=dark] .modern-table-container {
+    background: var(--bs-tertiary-bg);
+    border: 1px solid var(--bs-border-color);
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.3);
+}
+
+[data-bs-theme=dark] .modern-filters-card {
+    background: var(--bs-tertiary-bg);
+    border: 1px solid var(--bs-border-color);
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.3);
+}
+
+[data-bs-theme=dark] .modern-table-card {
+    background: var(--bs-tertiary-bg);
+    border: 1px solid var(--bs-border-color);
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.3);
+}
+
 .filters-header {
     display: flex;
     justify-content: space-between;
@@ -156,6 +175,12 @@
     border-bottom: 1px solid #dee2e6;
 }
 
+/* Dark mode search bar */
+[data-bs-theme=dark] .table-search-bar {
+    background: var(--bs-secondary-bg);
+    border-bottom: 1px solid var(--bs-border-color);
+}
+
 /* Pagination using Bootstrap */
 .modern-pagination {
     display: flex;
@@ -166,9 +191,20 @@
     border-top: 1px solid #dee2e6;
 }
 
+/* Dark mode pagination */
+[data-bs-theme=dark] .modern-pagination {
+    background: var(--bs-secondary-bg);
+    border-top: 1px solid var(--bs-border-color);
+}
+
 .pagination-info {
     color: #6c757d;
     font-size: 0.875rem;
+}
+
+/* Dark mode pagination info */
+[data-bs-theme=dark] .pagination-info {
+    color: var(--bs-secondary-color);
 }
 
 .pagination-controls {

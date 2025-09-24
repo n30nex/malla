@@ -28,12 +28,24 @@
     .signal-good { background-color: #fff3cd; color: #856404; }
     .signal-fair { background-color: #f8d7da; color: #721c24; }
     .signal-poor { background-color: #f5c6cb; color: #721c24; }
+
+    /* Dark mode signal indicators */
+    [data-bs-theme=dark] .signal-excellent { background-color: rgba(63, 185, 80, 0.2); color: #3fb950; }
+    [data-bs-theme=dark] .signal-good { background-color: rgba(210, 153, 34, 0.2); color: #d29922; }
+    [data-bs-theme=dark] .signal-fair { background-color: rgba(248, 81, 73, 0.2); color: #f85149; }
+    [data-bs-theme=dark] .signal-poor { background-color: rgba(248, 81, 73, 0.3); color: #f85149; }
     .hop-badge {
         background-color: #e9ecef;
         color: #495057;
         padding: 2px 6px;
         border-radius: 8px;
         font-size: 0.75rem;
+    }
+
+    /* Dark mode hop badge */
+    [data-bs-theme=dark] .hop-badge {
+        background-color: var(--bs-secondary-bg);
+        color: var(--bs-body-color);
     }
     .payload-hex {
         font-family: 'Courier New', monospace;
@@ -42,6 +54,12 @@
         border-radius: 4px;
         word-break: break-all;
         font-size: 0.8rem;
+    }
+
+    /* Dark mode payload hex */
+    [data-bs-theme=dark] .payload-hex {
+        background-color: var(--bs-secondary-bg);
+        color: var(--bs-body-color);
     }
     .yaml-content {
         font-family: 'Courier New', monospace;
@@ -52,6 +70,12 @@
         white-space: pre-wrap;
         max-height: 400px;
         overflow-y: auto;
+    }
+
+    /* Dark mode yaml content */
+    [data-bs-theme=dark] .yaml-content {
+        background-color: var(--bs-secondary-bg);
+        color: var(--bs-body-color);
     }
     .time-diff-positive { color: #28a745; }
     .time-diff-negative { color: #dc3545; }

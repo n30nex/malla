@@ -38,6 +38,13 @@
     overflow-y: auto;
 }
 
+/* Dark mode node picker dropdown */
+[data-bs-theme=dark] .node-picker-dropdown {
+    background: var(--bs-tertiary-bg);
+    border: 1px solid var(--bs-border-color);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.3);
+}
+
 .node-picker-dropdown.show {
     display: block !important;
 }
@@ -58,6 +65,12 @@
     background-color: #f8f9fa;
 }
 
+/* Dark mode node picker items */
+[data-bs-theme=dark] .node-picker-item:hover,
+[data-bs-theme=dark] .node-picker-item.active {
+    background-color: var(--bs-secondary-bg);
+}
+
 .node-picker-item-name {
     font-weight: 500;
     color: #212529;
@@ -75,11 +88,27 @@
     margin-top: 2px;
 }
 
+/* Dark mode node picker text */
+[data-bs-theme=dark] .node-picker-item-name {
+    color: var(--bs-body-color);
+}
+
+[data-bs-theme=dark] .node-picker-item-id,
+[data-bs-theme=dark] .node-picker-item-details {
+    color: var(--bs-secondary-color);
+}
+
 .node-picker-loading,
 .node-picker-no-results {
     padding: 12px;
     text-align: center;
     color: #6c757d;
+}
+
+/* Dark mode loading and no results */
+[data-bs-theme=dark] .node-picker-loading,
+[data-bs-theme=dark] .node-picker-no-results {
+    color: var(--bs-secondary-color);
 }
 
 .node-picker-loading .spinner-border {
@@ -140,6 +169,13 @@
     overflow-y: auto;
 }
 
+/* Dark mode gateway picker dropdown */
+[data-bs-theme=dark] .gateway-picker-dropdown {
+    background: var(--bs-tertiary-bg);
+    border: 1px solid var(--bs-border-color);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.3);
+}
+
 .gateway-picker-dropdown.show {
     display: block !important;
 }
@@ -160,6 +196,12 @@
     background-color: #f8f9fa;
 }
 
+/* Dark mode gateway picker items */
+[data-bs-theme=dark] .gateway-picker-item:hover,
+[data-bs-theme=dark] .gateway-picker-item.active {
+    background-color: var(--bs-secondary-bg);
+}
+
 .gateway-picker-item-name {
     font-weight: 500;
     color: #212529;
@@ -177,11 +219,27 @@
     margin-top: 2px;
 }
 
+/* Dark mode gateway picker text */
+[data-bs-theme=dark] .gateway-picker-item-name {
+    color: var(--bs-body-color);
+}
+
+[data-bs-theme=dark] .gateway-picker-item-id,
+[data-bs-theme=dark] .gateway-picker-item-details {
+    color: var(--bs-secondary-color);
+}
+
 .gateway-picker-loading,
 .gateway-picker-no-results {
     padding: 12px;
     text-align: center;
     color: #6c757d;
+}
+
+/* Dark mode gateway loading and no results */
+[data-bs-theme=dark] .gateway-picker-loading,
+[data-bs-theme=dark] .gateway-picker-no-results {
+    color: var(--bs-secondary-color);
 }
 
 .gateway-picker-loading .spinner-border {
@@ -199,4 +257,4 @@
 /* Keyboard navigation */
 .gateway-picker-item.keyboard-active {
     background-color: #e9ecef;
-} 
+}

@@ -132,6 +132,11 @@
     z-index: 1;
 }
 
+/* Dark mode graph container */
+[data-bs-theme=dark] .graph-container {
+    background: var(--bs-body-bg);
+}
+
 .graph-main {
     flex: 1;
     position: relative;
@@ -158,6 +163,13 @@
     z-index: 100;
 }
 
+/* Dark mode loading and error overlays */
+[data-bs-theme=dark] .loading-overlay,
+[data-bs-theme=dark] .error-overlay {
+    background: rgba(13, 17, 23, 0.9);
+    color: var(--bs-body-color);
+}
+
 .error-overlay {
     color: #dc3545;
 }
@@ -170,6 +182,12 @@
     text-anchor: middle;
     pointer-events: none;
     text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
+}
+
+/* Dark mode node labels */
+[data-bs-theme=dark] .node-label {
+    fill: var(--bs-body-color);
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
 }
 
 .node-label.highlighted {

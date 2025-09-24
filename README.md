@@ -1,7 +1,10 @@
-# Malla
+# 📻 Candaverse MQTT
 
-Malla (_Mesh_, in Spanish) is an ([AI-built](./AI.md)) tool that logs Meshtastic packets from an MQTT broker into a SQLite database and exposes a web UI to get some interesting data insights from them.
-Fork: We added Map Report packets to the data (as this is the most used way for map data to enter MQTT)
+Candaverse MQTT (formerly Malla) is an ([AI-built](./AI.md)) tool that logs Meshtastic packets from an MQTT broker into a SQLite database and exposes a web UI to get some interesting data insights from them.
+
+## 🌙 Dark Mode Ready
+This application features a comprehensive dark mode theme with improved readability and modern UI design. The dark mode is enabled by default and can be toggled using the theme switch in the navigation bar.
+
 ## Running Instances
 Check out some instances with running data from community MQTT servers:
 - meshtastic.es (Spain): https://malla.meshtastic.es
@@ -31,6 +34,8 @@ Check out some instances with running data from community MQTT servers:
 • **Single-source config** – One `config.yaml` (or `MALLA_*` env-vars) drives both the capture tool and the web UI.
 
 • **One-command launch** – `malla-capture` and `malla-web` wrapper scripts get you up and running in seconds.
+
+• **🌙 Dark Mode UI** – Modern dark theme with improved readability, theme toggle, and comprehensive styling across all components.
 
 <!-- screenshots:start -->
 ![dashboard](.screenshots/dashboard.jpg)

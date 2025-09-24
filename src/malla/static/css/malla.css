@@ -180,13 +180,29 @@ h1, .h1 {
 
 /* Dark mode support - Bootstrap native */
 [data-bs-theme=dark] {
-  --bs-body-bg: #212529;
-  --bs-body-bg-rgb: 33, 37, 41;
-  --bs-tertiary-bg: #2b3035;
-  --bs-secondary-bg: #343a40;
-  --bs-body-color: #dee2e6;
-  --bs-body-color-rgb: 222, 226, 230;
-  --bs-secondary-color: #adb5bd;
+  --bs-body-bg: #0d1117;
+  --bs-body-bg-rgb: 13, 17, 23;
+  --bs-tertiary-bg: #161b22;
+  --bs-secondary-bg: #21262d;
+  --bs-body-color: #f0f6fc;
+  --bs-body-color-rgb: 240, 246, 252;
+  --bs-secondary-color: #8b949e;
+  --bs-border-color: #30363d;
+  --bs-border-color-translucent: rgba(48, 54, 61, 0.175);
+
+  /* Enhanced dark mode colors */
+  --bs-primary: #2f81f7;
+  --bs-primary-rgb: 47, 129, 247;
+  --bs-secondary: #7d8590;
+  --bs-success: #3fb950;
+  --bs-info: #58a6ff;
+  --bs-warning: #d29922;
+  --bs-danger: #f85149;
+
+  /* Dark mode shadows */
+  --bs-box-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+  --bs-box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2), 0 1px 3px rgba(0, 0, 0, 0.1);
+  --bs-box-shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.3), 0 4px 10px rgba(0, 0, 0, 0.2);
 }
 
 [data-bs-theme=dark] .card {
@@ -196,6 +212,122 @@ h1, .h1 {
 
 [data-bs-theme=dark] .card:hover {
   background-color: var(--bs-secondary-bg);
+}
+
+/* Dark mode navbar */
+[data-bs-theme=dark] .navbar {
+  background-color: var(--bs-tertiary-bg) !important;
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+/* Dark mode form controls */
+[data-bs-theme=dark] .form-control,
+[data-bs-theme=dark] .form-select {
+  background-color: var(--bs-tertiary-bg);
+  border-color: var(--bs-border-color);
+  color: var(--bs-body-color);
+}
+
+[data-bs-theme=dark] .form-control:focus,
+[data-bs-theme=dark] .form-select:focus {
+  background-color: var(--bs-tertiary-bg);
+  border-color: var(--bs-primary);
+  color: var(--bs-body-color);
+  box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.25);
+}
+
+/* Dark mode buttons */
+[data-bs-theme=dark] .btn-outline-secondary {
+  color: var(--bs-secondary-color);
+  border-color: var(--bs-border-color);
+}
+
+[data-bs-theme=dark] .btn-outline-secondary:hover {
+  background-color: var(--bs-secondary-bg);
+  border-color: var(--bs-border-color);
+  color: var(--bs-body-color);
+}
+
+/* Dark mode tables */
+[data-bs-theme=dark] .table {
+  color: var(--bs-body-color);
+  --bs-table-hover-bg: rgba(var(--bs-primary-rgb), 0.1);
+  --bs-table-striped-bg: rgba(255, 255, 255, 0.05);
+}
+
+[data-bs-theme=dark] .table > :not(caption) > * > * {
+  border-color: var(--bs-border-color);
+}
+
+/* Dark mode badges */
+[data-bs-theme=dark] .badge {
+  color: #fff;
+}
+
+/* Dark mode dropdowns */
+[data-bs-theme=dark] .dropdown-menu {
+  background-color: var(--bs-tertiary-bg);
+  border-color: var(--bs-border-color);
+}
+
+[data-bs-theme=dark] .dropdown-item {
+  color: var(--bs-body-color);
+}
+
+[data-bs-theme=dark] .dropdown-item:hover,
+[data-bs-theme=dark] .dropdown-item:focus {
+  background-color: var(--bs-secondary-bg);
+  color: var(--bs-body-color);
+}
+
+/* Dark mode tooltips */
+[data-bs-theme=dark] .tooltip .tooltip-inner {
+  background-color: var(--bs-tertiary-bg);
+  color: var(--bs-body-color);
+  border: 1px solid var(--bs-border-color);
+}
+
+/* Dark mode pagination */
+[data-bs-theme=dark] .pagination-btn {
+  background-color: var(--bs-tertiary-bg);
+  border-color: var(--bs-border-color);
+  color: var(--bs-body-color);
+}
+
+[data-bs-theme=dark] .pagination-btn:hover {
+  background-color: var(--bs-secondary-bg);
+  border-color: var(--bs-border-color);
+  color: var(--bs-body-color);
+}
+
+[data-bs-theme=dark] .pagination-btn.active {
+  background-color: var(--bs-primary);
+  border-color: var(--bs-primary);
+  color: #fff;
+}
+
+/* Dark mode loading states */
+[data-bs-theme=dark] .loading-spinner {
+  border-color: var(--bs-border-color);
+  border-top-color: var(--bs-primary);
+}
+
+/* Dark mode empty states */
+[data-bs-theme=dark] .empty-state {
+  color: var(--bs-secondary-color);
+}
+
+/* Dark mode scrollbars */
+[data-bs-theme=dark] * {
+  scrollbar-color: var(--bs-border-color) transparent;
+}
+
+[data-bs-theme=dark] *::-webkit-scrollbar-thumb {
+  background: var(--bs-border-color);
+}
+
+[data-bs-theme=dark] *::-webkit-scrollbar-thumb:hover {
+  background: var(--bs-primary);
 }
 
 /* Application-specific components using Bootstrap utilities */
@@ -360,7 +492,7 @@ h1, .h1 {
 [data-bs-theme=dark] .modern-table-container,
 [data-bs-theme=dark] .modern-filters-card {
   background: var(--bs-tertiary-bg);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--bs-border-color);
 }
 
 [data-bs-theme=dark] .modern-table tbody tr:nth-of-type(odd) {
@@ -369,6 +501,168 @@ h1, .h1 {
 
 [data-bs-theme=dark] .modern-table tbody tr:hover {
   background-color: rgba(var(--bs-primary-rgb), 0.15);
+}
+
+/* Dark mode table sidebar */
+[data-bs-theme=dark] .table-sidebar {
+  background: var(--bs-tertiary-bg);
+  border-right: 1px solid var(--bs-border-color);
+}
+
+/* Dark mode search bars */
+[data-bs-theme=dark] .table-search-bar {
+  background: var(--bs-secondary-bg);
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+/* Dark mode pagination */
+[data-bs-theme=dark] .modern-pagination {
+  background: var(--bs-secondary-bg);
+  border-top: 1px solid var(--bs-border-color);
+}
+
+[data-bs-theme=dark] .pagination-info {
+  color: var(--bs-secondary-color);
+}
+
+/* Dark mode action buttons */
+[data-bs-theme=dark] .action-btn {
+  color: var(--bs-primary);
+  border-color: var(--bs-primary);
+  background-color: transparent;
+}
+
+[data-bs-theme=dark] .action-btn:hover {
+  color: #fff;
+  background-color: var(--bs-primary);
+  border-color: var(--bs-primary);
+}
+
+[data-bs-theme=dark] .action-btn-primary {
+  color: #fff;
+  background-color: var(--bs-primary);
+  border-color: var(--bs-primary);
+}
+
+[data-bs-theme=dark] .action-btn-primary:hover {
+  background-color: color-mix(in srgb, var(--bs-primary) 85%, black);
+  border-color: color-mix(in srgb, var(--bs-primary) 85%, black);
+}
+
+/* Dark mode modern badges */
+[data-bs-theme=dark] .modern-badge-primary {
+  background-color: var(--bs-primary);
+  color: #fff;
+}
+
+[data-bs-theme=dark] .modern-badge-secondary {
+  background-color: var(--bs-secondary);
+  color: #fff;
+}
+
+[data-bs-theme=dark] .modern-badge-success {
+  background-color: var(--bs-success);
+  color: #fff;
+}
+
+[data-bs-theme=dark] .modern-badge-danger {
+  background-color: var(--bs-danger);
+  color: #fff;
+}
+
+[data-bs-theme=dark] .modern-badge-warning {
+  background-color: var(--bs-warning);
+  color: #000;
+}
+
+[data-bs-theme=dark] .modern-badge-info {
+  background-color: var(--bs-info);
+  color: #000;
+}
+
+/* Dark mode filter forms */
+[data-bs-theme=dark] .filter-group label {
+  color: var(--bs-body-color);
+}
+
+/* Dark mode modern buttons */
+[data-bs-theme=dark] .btn-modern-primary {
+  color: #fff;
+  background-color: var(--bs-primary);
+  border-color: var(--bs-primary);
+}
+
+[data-bs-theme=dark] .btn-modern-primary:hover {
+  background-color: color-mix(in srgb, var(--bs-primary) 85%, black);
+  border-color: color-mix(in srgb, var(--bs-primary) 85%, black);
+}
+
+[data-bs-theme=dark] .btn-modern-secondary {
+  color: var(--bs-secondary-color);
+  background-color: transparent;
+  border-color: var(--bs-border-color);
+}
+
+[data-bs-theme=dark] .btn-modern-secondary:hover {
+  color: var(--bs-body-color);
+  background-color: var(--bs-secondary-bg);
+  border-color: var(--bs-border-color);
+}
+
+/* Dark mode filter sections */
+[data-bs-theme=dark] .filters-header {
+  background: var(--bs-primary);
+  color: white;
+}
+
+[data-bs-theme=dark] .filters-body {
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-body-color);
+}
+
+/* Dark mode form labels and inputs in filters */
+[data-bs-theme=dark] .filter-group label {
+  color: var(--bs-body-color);
+}
+
+[data-bs-theme=dark] .form-label {
+  color: var(--bs-body-color);
+}
+
+/* Dark mode text in filter sections */
+[data-bs-theme=dark] .text-muted {
+  color: #b1bac4 !important;
+}
+
+/* Dark mode small text */
+[data-bs-theme=dark] small {
+  color: #b1bac4;
+}
+
+/* Dark mode pagination info */
+[data-bs-theme=dark] .pagination-info {
+  color: #b1bac4;
+}
+
+/* Dark mode filter cards */
+[data-bs-theme=dark] .card-header {
+  background: var(--bs-primary);
+  color: white;
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+[data-bs-theme=dark] .card-header h6 {
+  color: white;
+}
+
+/* Dark mode filter form labels */
+[data-bs-theme=dark] .form-label {
+  color: var(--bs-body-color);
+}
+
+/* Dark mode filter descriptions */
+[data-bs-theme=dark] .text-muted {
+  color: var(--bs-secondary-color) !important;
 }
 
 /* Utility classes following Bootstrap naming conventions */
