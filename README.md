@@ -1,8 +1,11 @@
 # 📻 Candaverse MQTT
 
 Candaverse MQTT (formerly Malla) is an ([AI-built](./AI.md)) tool that logs Meshtastic packets from an MQTT broker into a SQLite database and exposes a web UI to get some interesting data insights from them.
-Original author:https://github.com/zenitraM 
+
+Original author:https://github.com/zenitraM
+
 Forked from https://github.com/zenitraM/malla
+
 ## 🌙 Dark Mode Ready
 This application features a comprehensive dark mode theme with improved readability and modern UI design. The dark mode is enabled by default and can be toggled using the theme switch in the navigation bar.
 
