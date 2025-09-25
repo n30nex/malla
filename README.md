@@ -12,7 +12,7 @@ This application features a comprehensive dark mode theme with improved readabil
 ## Running Instances
 Check out some instances with running data from community MQTT servers:
 - meshtastic.es (Spain): https://malla.meshtastic.es
-
+- http://wiki.mt.gt http://canadaverse.servebeer.com/
 ## Features
 
 ### 🚀 Key Highlights
