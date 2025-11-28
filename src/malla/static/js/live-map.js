@@ -350,26 +350,37 @@
       }
     ).addTo(map);
 
+    // Ensure the SVG path has the animation class (Leaflet sometimes drops custom class on updates)
+    const pathEl = line.getElement?.();
+    if (pathEl) {
+      pathEl.classList.add("live-arc");
+      // Kick off animation by resetting dash offset
+      pathEl.style.strokeDashoffset = "0";
+      pathEl.style.strokeDasharray = line.options.dashArray || "10 14";
+    }
+
     polylines.push({ line, created: Date.now() });
     prunePolylines();
   }
 
   function renderTraceroutePath(routeNodes) {
-    if (!Array.isArray(routeNodes) || routeNodes.length < 2) return;
+    if (!Array.isArray(routeNodes) || routeNodes.length === 0) return;
     const now = Date.now();
-    routeNodes.forEach((nid, idx) => {
+    let hopIdx = 0;
+    routeNodes.forEach((nid) => {
       const loc = nodeLocations.get(nid);
       if (!loc) return;
       ensureNameLabel(loc);
       const label = L.marker([loc.latitude, loc.longitude], {
         icon: L.divIcon({
           className: "hop-label",
-          html: `<div>${idx}</div>`,
+          html: `<div>${hopIdx}</div>`,
           iconAnchor: [6, 10],
         }),
         interactive: false,
       }).addTo(nameLabelLayer || map);
       tracerouteLabels.push({ layer: label, created: now });
+      hopIdx += 1;
     });
   }
 
@@ -465,21 +476,32 @@
     // Always add activity, even if we only know one side
     addActivityEntry(packet, fromLoc, toLoc);
 
-    if (packet.portnum_name === "TRACEROUTE_APP" && Array.isArray(packet.route_nodes) && packet.route_nodes.length > 1) {
-      // Trace the full path with staggered animation
-      const pathIds = packet.route_nodes;
-      const pathLocs = pathIds.map((nid) => nodeLocations.get(nid)).filter(Boolean);
-      if (pathLocs.length >= 2) {
-        renderTraceroutePath(pathIds);
-        for (let i = 0; i < pathLocs.length - 1; i++) {
-          const a = pathIds[i];
-          const b = pathIds[i + 1];
-          drawLink(a, b, packet, {
+    if (packet.portnum_name === "TRACEROUTE_APP") {
+      // Build a path including source/route/destination
+      const routeIds = [];
+      if (fromId != null) routeIds.push(fromId);
+      if (Array.isArray(packet.route_nodes) && packet.route_nodes.length > 0) {
+        routeIds.push(...packet.route_nodes);
+      }
+      if (toId != null && toId !== 0) routeIds.push(toId);
+
+      // Render hop labels for every known location in order
+      renderTraceroutePath(routeIds);
+
+      // Draw as much of the path as we can with known coordinates
+      let lastKnownId = null;
+      for (let i = 0; i < routeIds.length; i++) {
+        const nid = routeIds[i];
+        const loc = nodeLocations.get(nid);
+        if (!loc) continue;
+        if (lastKnownId != null && lastKnownId !== nid) {
+          drawLink(lastKnownId, nid, packet, {
             weight: 4,
-            dashArray: "2 6",
+            dashArray: "4 8",
             opacity: 0.9,
           });
         }
+        lastKnownId = nid;
       }
     } else {
       // Determine best available endpoints for animation
