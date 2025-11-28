@@ -8,6 +8,8 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+from psycopg2.extras import RealDictCursor
+
 from ..database.repositories import LocationRepository
 
 logger = logging.getLogger(__name__)
@@ -459,16 +461,16 @@ class LocationService:
             recent_nodes_count = len(recent_nodes)
 
             # Get position packet statistics from database
-            from ..database.connection import get_db_connection
+            from ..database.connection import get_db_connection, put_db_connection
 
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Total position packets
             cursor.execute("""
                 SELECT COUNT(*) as total_count
                 FROM packet_history
-                WHERE portnum = 3  -- POSITION_APP
+                WHERE portnum IN (3, 73)  -- POSITION_APP and MAP_REPORT_APP
                 AND raw_payload IS NOT NULL
             """)
             total_position_packets = cursor.fetchone()["total_count"]
@@ -478,15 +480,22 @@ class LocationService:
                 """
                 SELECT COUNT(*) as recent_count
                 FROM packet_history
-                WHERE portnum = 3  -- POSITION_APP
+                WHERE portnum IN (3, 73)  -- POSITION_APP and MAP_REPORT_APP
                 AND raw_payload IS NOT NULL
-                AND timestamp > ?
+                AND timestamp > %s
             """,
                 (twenty_four_hours_ago,),
             )
             recent_position_packets = cursor.fetchone()["recent_count"]
 
-            conn.close()
+            cursor.close()
+            try:
+                put_db_connection(conn)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
             # Calculate geographic boundaries and center
             lats = [loc["latitude"] for loc in locations]
@@ -869,10 +878,10 @@ class LocationService:
             # Lazily import here to avoid circular deps and keep startup fast
             from datetime import datetime
 
-            from ..database.connection import get_db_connection
+            from ..database.connection import get_db_connection, put_db_connection
 
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # ------------------------------------------------------------------
             # Build WHERE clause based on provided filters.
@@ -886,12 +895,12 @@ class LocationService:
             ]
             params: list[Any] = []
 
-            # Time range – same handling as get_node_locations / get_traceroute_links
+            # Time range - same handling as get_node_locations / get_traceroute_links
             if filters.get("start_time") is not None:
-                where_clauses.append("timestamp >= ?")
+                where_clauses.append("timestamp >= %s")
                 params.append(filters["start_time"])
             if filters.get("end_time") is not None:
-                where_clauses.append("timestamp <= ?")
+                where_clauses.append("timestamp <= %s")
                 params.append(filters["end_time"])
 
             # Optional server-side gateway filter.  ``gateway_id`` is stored as the
@@ -904,7 +913,7 @@ class LocationService:
                 except Exception:
                     # Assume caller already supplied the string format
                     gw_hex = str(gw_val)
-                where_clauses.append("gateway_id = ?")
+                where_clauses.append("gateway_id = %s")
                 params.append(gw_hex)
 
             where_sql = "WHERE " + " AND ".join(where_clauses)
@@ -923,7 +932,14 @@ class LocationService:
             """
             cursor.execute(query, params)
             rows = [dict(r) for r in cursor.fetchall()]
-            conn.close()
+            cursor.close()
+            try:
+                put_db_connection(conn)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
             # ------------------------------------------------------------------
             # Convert DB rows into link dictionaries.

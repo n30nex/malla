@@ -1,334 +1,121 @@
 # Malla
 
-Malla (_Mesh_, in Spanish) is an ([AI-built](./AI.md)) tool that logs Meshtastic packets from an MQTT broker into a SQLite database and exposes a web UI to get some interesting data insights from them.
+Malla (Spanish for "mesh") captures Meshtastic MQTT traffic into PostgreSQL and ships a Flask web UI packed with mesh analytics. Both the capture daemon and the UI read a single config, so you can point them at the same broker/database and get dashboards within minutes.
 
 ## Running Instances
-Check out some instances with running data from community MQTT servers:
 - meshtastic.es (Spain): https://malla.meshtastic.es
 - malla.ctmesh.org (Connecticut): https://malla.ctmesh.org
 
+## Components
+- `malla-capture`: subscribes to your Meshtastic MQTT broker, optionally decrypts secondary channels, and writes packets/node info into PostgreSQL with schema migrations and background data cleanup.
+- `malla-web`: Flask UI for dashboards, maps, tables, and diagnostics.
+- `malla-web-gunicorn`: production WSGI entry point (used by the `docker-compose.prod.yml` override).
+- Database: PostgreSQL 16+ (SQLite is only kept for legacy/test fixtures).
+
 ## Features
+**Capture pipeline**
+- MQTT ingest with auth support, topic prefix/suffix control, and optional multi-key decryption for secondary channels.
+- Automatic PostgreSQL schema creation, idempotent migrations, and heavy indexing for fast analytics.
+- Background retention worker that prunes stale packets and nodes based on `data_retention_hours`.
+- Enriched logging (text, position, telemetry, traceroute, MAP_REPORT) plus hop/gateway metadata.
+- Optional OpenTelemetry exporter (`otlp_endpoint`) for traces/metrics.
 
-### 🚀 Key Highlights
+**Web UI**
+- Live dashboard: active/total nodes, packet rates, RF averages, port breakdowns, gateway counts.
+- Packet browser: modern table with time/node/gateway/channel/port/RSSI/SNR/hop filters, grouping by `mesh_packet_id`, and detail pages with receptions, payload decode, and traceroute graphs.
+- Node explorer: searchable/sortable list with status badges, activity counts, primary channel, and detailed node pages (telemetry, recent packets, location history, relay candidates).
+- Maps and topology: location map, live packet flow, traceroute visualizations, network graph, longest links, and line-of-sight explorer.
+- Gateway tooling: gateway comparison matrix, direct/relay reception views, hop analysis, and multi-gateway RSSI/SNR deltas.
+- Chat view for recent text messages.
 
-• **End-to-end capture** – Logs every packet from your Meshtastic MQTT broker straight into an optimised SQLite database.
+## Quick Start (Docker Compose)
+The provided compose file runs PostgreSQL, the capture daemon, and the web UI together.
 
-• **Live dashboard** – Real-time counters for total / active nodes, packet rate, signal quality bars and network-health indicators (auto-refresh).
-
-• **Packet browser** – Lightning-fast table with powerful filtering (time range, node, port, RSSI/SNR, type), pagination and one-click CSV export.
-
-• **Node explorer** – Detailed hardware, role, battery and signal info for every node – searchable picker plus online/offline badges.
-
-• **Traceroutes** – Historical list view to inspect packet paths across the mesh network.
-
-• **Map view** – Leaflet map with live node locations, RF-link overlays and role colour-coding.
-
-• **Network graph** – Force-directed graph visualising multi-hop links and RF distances between nodes / gateways.
-
-• **Toolbox** – Hop-analysis tables, gateway-compare matrix and "longest links" explorer for deep dives.
-
-• **Analytics charts** – 7-day trends, RSSI distribution, top talkers, hop distribution and more (Plotly powered).
-
-• **Single-source config** – One `config.yaml` (or `MALLA_*` env-vars) drives both the capture tool and the web UI.
-
-• **One-command launch** – `malla-capture` and `malla-web` wrapper scripts get you up and running in seconds.
-
-<!-- screenshots:start -->
-![dashboard](.screenshots/dashboard.jpg)
-![nodes](.screenshots/nodes.jpg)
-![packets](.screenshots/packets.jpg)
-![traceroutes](.screenshots/traceroutes.jpg)
-![map](.screenshots/map.jpg)
-![traceroute_graph](.screenshots/traceroute_graph.jpg)
-![hop_analysis](.screenshots/hop_analysis.jpg)
-![gateway_compare](.screenshots/gateway_compare.jpg)
-![longest_links](.screenshots/longest_links.jpg)
-![line_of_sight](.screenshots/line_of_sight.jpg)
-<!-- screenshots:end -->
-
-## Prerequisites
-
-- Python 3.13+
-- Access to a Meshtastic MQTT broker
-- Modern web browser with JavaScript enabled
-
-## Installation
-
-### Using Docker (Recommended)
-
-The easiest way to run Malla is using Docker. Pre-built images are available from GitHub Container Registry:
-
-1. **Copy the environment configuration:**
+1. Copy and edit your environment:
    ```bash
    cp env.example .env
+   $EDITOR .env  # set MALLA_MQTT_* and any MALLA_NAME/SECRET_KEY overrides
    ```
-
-2. **Edit the configuration:**
-   ```bash
-   $EDITOR .env  # Set your MQTT broker address and other settings
-   ```
-
-3. **Start the services:**
+2. Start the stack:
    ```bash
    docker-compose up -d
    ```
-
-4. **View logs:**
+   - Default ports: web UI on `http://localhost:5008`, PostgreSQL on `5432`.
+   - Data persists in the `postgres_data` volume.
+3. Tail logs:
    ```bash
-   docker-compose logs -f
+   docker-compose logs -f malla-capture
+   docker-compose logs -f malla-web
+   ```
+4. Production WSGI (Gunicorn):
+   ```bash
+   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+   # or set MALLA_WEB_COMMAND=/app/.venv/bin/malla-web-gunicorn in .env
    ```
 
-5. **Access the web UI:**
-   - Open http://localhost:5008 in your browser
-
-**For development with local code changes:**
-```bash
-# Edit docker-compose.yml to uncomment the 'build: .' lines
-# Then build and run:
-docker-compose up --build -d
-```
-
-**Manual Docker run (advanced):**
-```bash
-# Run the capture service
-docker run -d \
-  --name malla-capture \
-  -v malla_data:/app/data \
-  -e MALLA_MQTT_BROKER_ADDRESS=your.mqtt.broker.address \
-  ghcr.io/zenitram/malla:latest \
-  /app/.venv/bin/malla-capture
-
-# Run the web UI
-docker run -d \
-  --name malla-web \
-  -p 5008:5008 \
-  -v malla_data:/app/data \
-  ghcr.io/zenitram/malla:latest
-```
-
-### Using uv
-
-You can also install and run Malla directly using [uv](https://docs.astral.sh/uv/):
-1. **Clone or download** the project files to your preferred directory
-   ```bash
-   git clone https://github.com/zenitraM/malla.git
-   cd malla
-   ```
-
-2. **Install uv** if you don't have it installed yet:
+## Local Development with uv
+1. Install uv (if needed):
    ```bash
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
-
-3. **Create a configuration file** by copying the sample file:
+2. Install dependencies (adds a local `.venv`):
+   ```bash
+   uv sync --dev
+   ```
+3. Start or point to PostgreSQL (example):
+   ```bash
+   docker compose up -d postgres  # uses the included service
+   export MALLA_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/meshtastic_history
+   ```
+4. Create a config and set MQTT:
    ```bash
    cp config.sample.yaml config.yaml
-   $EDITOR config.yaml  # tweak values as desired
+   $EDITOR config.yaml  # set mqtt_broker_address, optional home_markdown, etc.
    ```
-
-4. **Start it** with `uv run` in the project directory, which should pull the required dependencies.
+5. Run the services (separate terminals):
    ```bash
-   # Start the web UI
-   uv run malla-web
-
-   # Start the MQTT capture tool
    uv run malla-capture
+   uv run malla-web          # dev server
+   # or: uv run malla-web-gunicorn
    ```
-
-### Using Nix
-The project also comes with a Nix flake and a devshell - if you have Nix installed or run NixOS it will set up
-`uv` for you together with the exact system dependencies that run on CI (Playwright, etc.):
-
-```bash
-nix develop --command uv run malla-web
-nix develop --command uv run malla-capture
-```
-
-## Quick Start
-
-The system consists of two components that work together:
-
-### 1. MQTT Data Capture
-
-This tool connects to your Meshtastic MQTT broker and captures all mesh packets to a SQLite database. You will need to configure the MQTT broker address in the `config.yaml` file (or set the `MALLA_MQTT_BROKER_ADDRESS` environment variable) before starting it. See [Configuration Options](#configuration-options) for the entire set of settings.
-
-```yaml
-mqtt_broker_address: "your.mqtt.broker.address"
-```
-
-You can use this tool with your own MQTT broker that you've got your own nodes connected to, or with a public broker if you've got permission to do so.
-
-**Start the capture tool:**
-```bash
-uv run malla-capture
-```
-
-### 2. Web UI
-
-The web interface for browsing and analyzing the captured data.
-
-**Start the web UI:**
-```bash
-uv run malla-web
-```
-
-**Access the web interface:**
-- Local: http://localhost:5008
-
-## Running Both Tools Together
-
-For a complete monitoring setup, run both tools simultaneously:
-
-**Terminal 1 - Data Capture:**
-```bash
-export MALLA_MQTT_BROKER_ADDRESS="127.0.0.1"  # Replace with your broker
-./malla-capture
-```
-
-**Terminal 2 - Web UI:**
-```bash
-./malla-web
-```
-
-Both tools use the same SQLite database concurrently using thread-safe connections.
-
-## Docker Configuration
-
-When using Docker, configuration is handled through environment variables defined in your `.env` file:
-
-### Production Deployment with Gunicorn
-
-For production deployments, Malla supports running with Gunicorn, a production-ready WSGI server that provides better performance and stability than Flask's development server.
-
-**Option 1: Using environment variable (recommended)**
-```bash
-# In your .env file:
-MALLA_WEB_COMMAND=/app/.venv/bin/malla-web-gunicorn
-```
-
-**Option 2: Using the production override file**
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-```
-
-**Option 3: Direct script execution**
-```bash
-# For local development with uv:
-uv run malla-web-gunicorn
-
-# Or using the executable script:
-./malla-web-gunicorn
-```
-
-The Gunicorn configuration automatically:
-- Uses multiple worker processes based on CPU cores
-- Enables proper logging and monitoring
-- Configures appropriate timeouts and connection limits
-- Provides better concurrent request handling
-
-**Benefits of Gunicorn over Flask dev server:**
-- Production-ready with proper process management
-- Better performance under load
-- Automatic worker process recycling
-- Proper signal handling for graceful shutdowns
-- Enhanced logging and monitoring capabilities
-
-### Environment File Setup
-1. **Copy the example:**
+6. Custom config path:
    ```bash
-   cp env.example .env
+   export MALLA_CONFIG_FILE=/path/to/config.yaml
    ```
 
-2. **Configure your settings:**
-   ```bash
-   # Required: Set your MQTT broker address
-   MALLA_MQTT_BROKER_ADDRESS=your.mqtt.broker.address
+## Configuration
+Configuration is loaded in this order: defaults -> `config.yaml` (or `MALLA_CONFIG_FILE`) -> environment variables prefixed with `MALLA_`. All env vars override YAML.
 
-   # Optional: Customize other settings
-   MALLA_NAME=My Malla Instance
-   MALLA_WEB_PORT=5008
-   MALLA_SECRET_KEY=your-production-secret-key
-   ```
+| Setting | Env var | Default | Purpose |
+| --- | --- | --- | --- |
+| `name` | `MALLA_NAME` | `"Malla"` | UI display name and browser title |
+| `home_markdown` | `MALLA_HOME_MARKDOWN` | `""` | Markdown block on the dashboard |
+| `secret_key` | `MALLA_SECRET_KEY` | `"dev-secret-key-change-in-production"` | Flask session key |
+| `host` / `port` | `MALLA_HOST` / `MALLA_PORT` | `0.0.0.0` / `5008` | Web bind address/port |
+| `debug` | `MALLA_DEBUG` | `false` | Flask debug (development only) |
+| `database_url` | `MALLA_DATABASE_URL` | `None` | PostgreSQL connection string (recommended) |
+| `database_host` / `database_port` / `database_name` / `database_user` / `database_password` | `MALLA_DATABASE_HOST` / ... | `localhost` / `5432` / `meshtastic_history` / `$USER` / `""` | Used if `database_url` is not set |
+| `mqtt_broker_address` | `MALLA_MQTT_BROKER_ADDRESS` | `"127.0.0.1"` | Meshtastic MQTT broker |
+| `mqtt_port` | `MALLA_MQTT_PORT` | `1883` | MQTT port |
+| `mqtt_username` / `mqtt_password` | `MALLA_MQTT_USERNAME` / `MALLA_MQTT_PASSWORD` | `None` | Optional MQTT auth |
+| `mqtt_topic_prefix` / `mqtt_topic_suffix` | `MALLA_MQTT_TOPIC_PREFIX` / `MALLA_MQTT_TOPIC_SUFFIX` | `"msh"` / `"/+/+/+/#"` | Topic selection |
+| `default_channel_key` | `MALLA_DEFAULT_CHANNEL_KEY` | `"1PG7OiApB1nwvP+rz05pAQ=="` | Comma-separated base64 keys for decrypting secondary channels |
+| `data_retention_hours` | `MALLA_DATA_RETENTION_HOURS` | `0` | Prune packets/nodes older than N hours (0 disables) |
+| `log_level` | `MALLA_LOG_LEVEL` | `"INFO"` | Capture service log level |
+| `otlp_endpoint` | `MALLA_OTLP_ENDPOINT` | `None` | Enable OTLP tracing/metrics export |
 
-### Key Configuration Options
-- `MALLA_MQTT_BROKER_ADDRESS`: Your MQTT broker IP/hostname (**required**)
-- `MALLA_MQTT_PORT`: MQTT broker port (default: 1883)
-- `MALLA_MQTT_USERNAME`/`MALLA_MQTT_PASSWORD`: MQTT authentication (optional)
-- `MALLA_WEB_PORT`: Port to expose the web UI (default: 5008)
-- `MALLA_NAME`: Display name in the web interface
+Notes:
+- `database_file` still exists for legacy/tests but runtime ingestion/queries expect PostgreSQL.
+- Environment variables always win over YAML values.
 
-### Data Persistence
-Data is automatically stored in a Docker volume (`malla_data`) and persists across container restarts. No manual volume setup is required when using `docker-compose`.
+## Data Retention
+Set `data_retention_hours` to automatically delete packet_history rows older than N hours and stale node_info entries with no recent packets. Defaults to `0` (no deletion). Cleanup runs hourly in the capture process.
 
-## Configuration Options
-
-### YAML configuration file *(recommended)*
-
-Malla will automatically look for a file named `config.yaml` in the **current
-working directory** when it starts.  You can point to an alternative file by
-setting the `MALLA_CONFIG_FILE` environment variable.
-
-If the file is not found, all built-in defaults are used (see
-`config.sample.yaml`).
-
-Copy the sample file and customise it:
-
-```bash
-cp config.sample.yaml config.yaml
-$EDITOR config.yaml  # tweak values as required
-```
-
-The file is **git-ignored** so you will never accidentally commit secrets such
-as your `secret_key`.
-
-The following keys are recognised:
-
-| YAML key        | Type   | Default                                  | Description                                   | Env-var override |
-| --------------- | ------ | ---------------------------------------- | --------------------------------------------- | ---------------- |
-| `name`          | str    | `"Malla"`                                | Display name shown in the navigation bar.     | `MALLA_NAME` |
-| `home_markdown` | str    | `""`                                     | Markdown rendered on the dashboard homepage.  | `MALLA_HOME_MARKDOWN` |
-| `secret_key`    | str    | `"dev-secret-key-change-in-production"` | Flask session secret key (change in prod!). (currently unused)   | `MALLA_SECRET_KEY` |
-| `database_file` | str    | `"meshtastic_history.db"`                | SQLite database file location.                | `MALLA_DATABASE_FILE` |
-| `host`          | str    | `"0.0.0.0"`                              | Interface to bind the web server to.          | `MALLA_HOST` |
-| `port`          | int    | `5008`                                   | TCP port for the web server.                  | `MALLA_PORT` |
-| `debug`         | bool   | `false`                                  | Run Flask in debug mode (unsafe for prod!).   | `MALLA_DEBUG` |
-| `mqtt_broker_address` | str | `"127.0.0.1"`                      | MQTT broker hostname or IP address.           | `MALLA_MQTT_BROKER_ADDRESS` |
-| `mqtt_port`     | int    | `1883`                                   | MQTT broker port.                              | `MALLA_MQTT_PORT` |
-| `mqtt_username` | str    | `""`                                     | MQTT broker username (optional).               | `MALLA_MQTT_USERNAME` |
-| `mqtt_password` | str    | `""`                                     | MQTT broker password (optional).               | `MALLA_MQTT_PASSWORD` |
-| `mqtt_topic_prefix` | str | `"msh"`                                 | MQTT topic prefix for Meshtastic messages.    | `MALLA_MQTT_TOPIC_PREFIX` |
-| `mqtt_topic_suffix` | str | `"/+/+/+/#"`                           | MQTT topic suffix pattern.                     | `MALLA_MQTT_TOPIC_SUFFIX` |
-| `default_channel_key` | str | `"1PG7OiApB1nwvP+rz05pAQ=="`         | Default channel key(s) for decryption (base64). Supports comma-separated list of keys - each will be tried in order until successful. | `MALLA_DEFAULT_CHANNEL_KEY` |
-| `data_retention_hours` | int | `0`                                     | Number of hours after which to delete old data (0 = never delete). Automatically cleans up packet_history and node_info records older than specified hours. | `MALLA_DATA_RETENTION_HOURS` |
-
-Environment variables **always override** values coming from YAML file.
-
-### Data Cleanup
-
-Malla includes an automatic data cleanup feature to help manage database size over time. When enabled, it will:
-
-1. Delete packet_history records older than the specified number of hours
-2. Delete node_info records for nodes that haven't been seen recently and have no packets in the packet_history table
-3. Repeat the cleanup process every hour in the background
-
-To enable data cleanup, set the `data_retention_hours` configuration parameter to a positive value:
-
-```yaml
-# Keep data for 7 days (168 hours)
-data_retention_hours: 168
-```
-
-Or via environment variable:
-```bash
-export MALLA_DATA_RETENTION_HOURS=168
-```
-
-Set to `0` (default) to disable cleanup completely.
-
-## Contributing
-
-Feel free to submit issues, feature requests, or pull requests to improve Malla!
+## Testing
+- Install test deps: `python run_tests.py --install`
+- Run everything: `python run_tests.py all -v`
+- Common subsets: `python run_tests.py unit`, `python run_tests.py integration`, `python run_tests.py api`
+- Direct pytest (with uv): `uv run pytest`
 
 ## License
-
-This project is licensed under the [MIT](LICENSE) license.
+MIT License. See `LICENSE` for details.

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Meshtastic MQTT to SQLite Capture Tool
+Meshtastic MQTT to PostgreSQL Capture Tool
 
 This script connects to a Meshtastic MQTT broker and captures all mesh packets
-to a SQLite database for analysis and monitoring. It processes protobuf messages
+to a PostgreSQL database for analysis and monitoring. It processes protobuf messages
 and extracts node information, telemetry, position data, and text messages.
 
 Features:
@@ -34,12 +34,15 @@ import base64
 import hashlib
 import logging
 import socket
-import sqlite3
 import threading
 import time
 from typing import Any
 
+from prometheus_client import Counter, Gauge, start_http_server
+
 import paho.mqtt.client as mqtt
+import psycopg2
+from psycopg2 import errors
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from meshtastic import (
@@ -49,12 +52,22 @@ from meshtastic import (
     portnums_pb2,
     telemetry_pb2,
 )
-from paho.mqtt.enums import CallbackAPIVersion
+try:
+    from paho.mqtt.enums import CallbackAPIVersion
+except Exception:
+    try:
+        from paho.mqtt.client import CallbackAPIVersion  # type: ignore
+    except Exception:
+        class CallbackAPIVersion:  # type: ignore
+            V5 = 5
+from psycopg2.extras import RealDictCursor
 
 # ---------------------------------------------------------------------------
 # Configuration (centralised via malla.config)
 # ---------------------------------------------------------------------------
-from malla.config import get_config  # Import here to avoid circular import issues
+from malla.config import get_config, validate_config  # Import here to avoid circular import issues
+from malla.database.connection import get_db_connection, put_db_connection
+from malla.telemetry import setup_telemetry
 
 # Load the singleton configuration once at module import time.  This ensures the
 # capture tool honours the same YAML + optional environment override mechanism
@@ -69,6 +82,17 @@ MQTT_USERNAME: str | None = _cfg.mqtt_username
 MQTT_PASSWORD: str | None = _cfg.mqtt_password
 MQTT_TOPIC_PREFIX: str = _cfg.mqtt_topic_prefix
 MQTT_TOPIC_SUFFIX: str = _cfg.mqtt_topic_suffix
+MQTT_KEEPALIVE: int = _cfg.mqtt_keepalive
+MQTT_QOS: int = _cfg.mqtt_qos
+MQTT_CLEAN_SESSION: bool = _cfg.mqtt_clean_session
+MQTT_TLS_ENABLED: bool = _cfg.mqtt_tls_enabled
+MQTT_TLS_CA_CERT: str | None = _cfg.mqtt_tls_ca_cert
+MQTT_TLS_CLIENT_CERT: str | None = _cfg.mqtt_tls_client_cert
+MQTT_TLS_CLIENT_KEY: str | None = _cfg.mqtt_tls_client_key
+MQTT_TLS_INSECURE: bool = _cfg.mqtt_tls_insecure
+MQTT_RECONNECT_MAX_RETRIES: int = max(1, _cfg.mqtt_reconnect_max_retries)
+MQTT_RECONNECT_BASE_DELAY: int = max(1, _cfg.mqtt_reconnect_base_delay)
+MQTT_RECONNECT_MAX_DELAY: int = max(MQTT_RECONNECT_BASE_DELAY, _cfg.mqtt_reconnect_max_delay)
 
 # Database file path
 DATABASE_FILE: str = _cfg.database_file
@@ -79,13 +103,26 @@ DECRYPTION_KEYS: list[str] = _cfg.get_decryption_keys()
 
 # Data retention settings
 DATA_RETENTION_HOURS: int = _cfg.data_retention_hours
+DATA_CLEANUP_INTERVAL_SECONDS: int = max(60, int(getattr(_cfg, "data_cleanup_interval_seconds", 3600)))
+METRICS_ENABLED: bool = getattr(_cfg, "metrics_enabled", False)
+METRICS_PORT: int = getattr(_cfg, "metrics_port", 9100)
 
-# Logging configuration – falls back to INFO if an invalid level was supplied
+# Logging configuration - falls back to INFO if an invalid level was supplied
 LOG_LEVEL = _cfg.log_level.upper()
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
+
+# Validate config and enable OpenTelemetry if configured
+validate_config(_cfg)
+
+if _cfg.otlp_endpoint:
+    try:
+        setup_telemetry(None, _cfg.otlp_endpoint)
+        logging.info("OpenTelemetry enabled for capture process")
+    except Exception as exc:  # noqa: BLE001
+        logging.warning(f"Failed to initialize OpenTelemetry: {exc}")
 
 # --- Global Variables ---
 db_lock = threading.Lock()  # Thread lock for database access
@@ -94,6 +131,22 @@ node_cache: dict[
 ] = {}  # In-memory cache: {node_id_numeric: {'hex_id': '!abc123', 'long_name': 'Name', 'short_name': 'Short', 'last_updated': timestamp}}
 cleanup_thread: threading.Thread | None = None  # Background thread for data cleanup
 stop_cleanup = threading.Event()  # Event to signal cleanup thread to stop
+ingest_stats_lock = threading.Lock()
+ingest_stats = {
+    "received": 0,
+    "parsed_ok": 0,
+    "parse_failed": 0,
+    "decrypt_success": 0,
+    "decrypt_failed": 0,
+}
+
+# Prometheus metrics (counters accumulate; optional HTTP exporter)
+PACKETS_RECEIVED = Counter("malla_packets_received_total", "MQTT messages received")
+PACKETS_PARSED = Counter("malla_packets_parsed_total", "Packets parsed successfully")
+PACKETS_PARSE_FAILED = Counter("malla_packets_parse_failed_total", "Packets that failed to parse")
+PACKETS_DECRYPT_SUCCESS = Counter("malla_packets_decrypt_success_total", "Packets decrypted successfully")
+PACKETS_DECRYPT_FAILED = Counter("malla_packets_decrypt_failed_total", "Packets failed to decrypt")
+ACTIVE_THREADS = Gauge("malla_active_threads", "Active threads in capture process")
 
 
 # --- Decryption Functions ---
@@ -251,7 +304,7 @@ def try_decrypt_mesh_packet(
                 mesh_packet.decoded.CopyFrom(decoded_data)
 
                 logging.info(
-                    f"✅ Successfully decrypted packet {packet_id} from {sender_id} with key {key_index + 1}/{len(keys_to_try)}: {portnums_pb2.PortNum.Name(decoded_data.portnum)}"
+                    f"Successfully decrypted packet {packet_id} from {sender_id} with key {key_index + 1}/{len(keys_to_try)}: {portnums_pb2.PortNum.Name(decoded_data.portnum)}"
                 )
                 return True
 
@@ -273,54 +326,74 @@ def try_decrypt_mesh_packet(
 
 # --- Database Functions ---
 def init_database() -> None:
-    """Initialize SQLite database with required tables."""
-    conn = sqlite3.connect(DATABASE_FILE, timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    """Initialize PostgreSQL database with required tables."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-    # Configure SQLite for better concurrency
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA synchronous=NORMAL")
-    cursor.execute("PRAGMA busy_timeout=30000")
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.execute("PRAGMA cache_size=10000")
-    cursor.execute("PRAGMA temp_store=MEMORY")
+    # Avoid startup deadlocks when multiple services initialize at once
+    try:
+        cursor.execute("SET lock_timeout TO '5s'")
+    except Exception:
+        logging.debug("Could not set lock_timeout; continuing without it")
 
-    # Table for packet history
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS packet_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp REAL NOT NULL,
-            topic TEXT NOT NULL,
-            from_node_id INTEGER,
-            to_node_id INTEGER,
-            portnum INTEGER,
-            portnum_name TEXT,
-            gateway_id TEXT,
-            channel_id TEXT,
-            mesh_packet_id INTEGER,
-            rssi INTEGER,
-            snr REAL,
-            hop_limit INTEGER,
-            hop_start INTEGER,
-            payload_length INTEGER,
-            raw_payload BLOB,
-            processed_successfully BOOLEAN DEFAULT TRUE,
-            message_type TEXT,
-            raw_service_envelope BLOB,
-            parsing_error TEXT
-        )
-    """)
+    def _create_index(sql: str) -> None:
+        """Create index with deadlock tolerance."""
+        try:
+            cursor.execute(sql)
+            conn.commit()
+        except errors.DeadlockDetected as exc:
+            logging.warning(f"Skipped index creation due to deadlock: {exc}")
+            conn.rollback()
+        except Exception as exc:
+            # Non-fatal: log and continue
+            logging.warning(f"Index creation failed ({sql[:60]}...): {exc}")
+            conn.rollback()
+
+    try:
+        # Table for packet history
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS packet_history (
+                id BIGSERIAL PRIMARY KEY,
+                timestamp DOUBLE PRECISION NOT NULL,
+                topic TEXT NOT NULL,
+                from_node_id BIGINT,
+                to_node_id BIGINT,
+                portnum INTEGER,
+                portnum_name TEXT,
+                gateway_id TEXT,
+                channel_id TEXT,
+                mesh_packet_id BIGINT,
+                rssi INTEGER,
+                snr DOUBLE PRECISION,
+                hop_limit INTEGER,
+                hop_start INTEGER,
+                payload_length INTEGER,
+                raw_payload BYTEA,
+                processed_successfully BOOLEAN DEFAULT TRUE,
+                message_type TEXT,
+                raw_service_envelope BYTEA,
+                parsing_error TEXT
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        logging.error(f"Error creating packet_history table: {e}")
+        conn.rollback()
+        raise
 
     # Add mesh_packet_id column if it doesn't exist (for existing databases)
     try:
-        cursor.execute("ALTER TABLE packet_history ADD COLUMN mesh_packet_id INTEGER")
+        cursor.execute("ALTER TABLE packet_history ADD COLUMN mesh_packet_id BIGINT")
         logging.info("Added mesh_packet_id column to packet_history table")
-    except sqlite3.OperationalError as e:
-        if "duplicate column name" in str(e).lower():
+        conn.commit()
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "duplicate column" in error_msg or "already exists" in error_msg:
             logging.debug("mesh_packet_id column already exists")
+            conn.rollback()
         else:
             logging.warning(f"Could not add mesh_packet_id column: {e}")
+            conn.rollback()
 
     # Add new MeshPacket fields if they don't exist (for existing databases)
     new_columns = [
@@ -331,11 +404,11 @@ def init_database() -> None:
         ("channel_index", "INTEGER"),
         ("rx_time", "INTEGER"),
         ("pki_encrypted", "BOOLEAN"),
-        ("next_hop", "INTEGER"),
-        ("relay_node", "INTEGER"),
+        ("next_hop", "BIGINT"),
+        ("relay_node", "BIGINT"),
         ("tx_after", "INTEGER"),
         ("message_type", "TEXT"),
-        ("raw_service_envelope", "BLOB"),
+        ("raw_service_envelope", "BYTEA"),
         ("parsing_error", "TEXT"),
     ]
 
@@ -345,76 +418,105 @@ def init_database() -> None:
                 f"ALTER TABLE packet_history ADD COLUMN {column_name} {column_type}"
             )
             logging.info(f"Added {column_name} column to packet_history table")
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" in str(e).lower():
+            conn.commit()
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "duplicate column" in error_msg or "already exists" in error_msg:
                 logging.debug(f"{column_name} column already exists")
+                conn.rollback()
             else:
                 logging.warning(f"Could not add {column_name} column: {e}")
+                conn.rollback()
 
-    # Table for node information cache
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS node_info (
-            node_id INTEGER PRIMARY KEY,
-            hex_id TEXT,
-            long_name TEXT,
-            short_name TEXT,
-            hw_model TEXT,
-            role TEXT,
-            primary_channel TEXT,
-            is_licensed BOOLEAN,
-            mac_address TEXT,
-            first_seen REAL NOT NULL,
-            last_updated REAL NOT NULL
-        )
-    """)
+    try:
+        # Table for node information cache
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS node_info (
+                node_id INTEGER PRIMARY KEY,
+                hex_id TEXT,
+                long_name TEXT,
+                short_name TEXT,
+                hw_model TEXT,
+                role TEXT,
+                primary_channel TEXT,
+                is_licensed BOOLEAN,
+                mac_address TEXT,
+                first_seen DOUBLE PRECISION NOT NULL,
+                last_updated DOUBLE PRECISION NOT NULL
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        logging.error(f"Error creating node_info table: {e}")
+        conn.rollback()
+        raise
 
     # Composite indexes for /api/nodes aggregation queries (96% faster than single-column indexes)
-    # These covering indexes allow SQLite to perform aggregations using only the index
-    cursor.execute(
+    # These covering indexes allow PostgreSQL to perform aggregations using only the index
+    _create_index(
         "CREATE INDEX IF NOT EXISTS idx_packet_history_stats ON packet_history(timestamp, from_node_id)"
     )
-    cursor.execute(
+    _create_index(
         "CREATE INDEX IF NOT EXISTS idx_packet_history_gateway_stats ON packet_history(timestamp, gateway_id)"
     )
 
     # Additional proven performance indexes (20-40% improvements, cache-aware benchmarked)
-    cursor.execute(
+    _create_index(
         "CREATE INDEX IF NOT EXISTS idx_packet_history_portnum_time ON packet_history(timestamp, portnum_name)"
     )
-    cursor.execute(
+    _create_index(
+        "CREATE INDEX IF NOT EXISTS idx_packet_history_channel ON packet_history(channel_id)"
+    )
+    _create_index(
+        "CREATE INDEX IF NOT EXISTS idx_packet_history_to_node ON packet_history(to_node_id)"
+    )
+    _create_index(
+        "CREATE INDEX IF NOT EXISTS idx_packet_history_gateway_id ON packet_history(gateway_id)"
+    )
+    _create_index(
         """CREATE INDEX IF NOT EXISTS idx_packet_history_direct_hops
            ON packet_history(timestamp, from_node_id, gateway_id, hop_start, hop_limit)
            WHERE hop_start = hop_limit"""
     )
-    cursor.execute(
+    _create_index(
         """CREATE INDEX IF NOT EXISTS idx_packet_history_relay_time
            ON packet_history(timestamp, relay_node)
            WHERE relay_node IS NOT NULL AND relay_node != 0"""
     )
 
     # Keep mesh_packet_id index (used for packet lookups)
-    cursor.execute(
+    _create_index(
         "CREATE INDEX IF NOT EXISTS idx_packet_mesh_id ON packet_history(mesh_packet_id)"
     )
 
     # Drop old redundant indexes (composite indexes above can serve the same queries via leftmost prefix)
-    cursor.execute("DROP INDEX IF EXISTS idx_packet_timestamp")
-    cursor.execute("DROP INDEX IF EXISTS idx_packet_from_node")
+    try:
+        cursor.execute("DROP INDEX IF EXISTS idx_packet_timestamp")
+    except Exception:
+        pass
+    try:
+        cursor.execute("DROP INDEX IF EXISTS idx_packet_from_node")
+    except Exception:
+        pass
 
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_node_hex_id ON node_info(hex_id)")
+    _create_index("CREATE INDEX IF NOT EXISTS idx_node_hex_id ON node_info(hex_id)")
 
     # Ensure primary_channel column exists for legacy databases
     try:
         cursor.execute("ALTER TABLE node_info ADD COLUMN primary_channel TEXT")
         logging.info("Added primary_channel column to node_info table")
-    except sqlite3.OperationalError as e:
-        if "duplicate column name" in str(e).lower():
+        conn.commit()
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "duplicate column" in error_msg or "already exists" in error_msg:
             logging.debug("primary_channel column already exists")
+            conn.rollback()
         else:
             logging.warning(f"Could not add primary_channel column: {e}")
+            conn.rollback()
 
     # Index for faster channel filtering
-    cursor.execute(
+    _create_index(
         "CREATE INDEX IF NOT EXISTS idx_node_primary_channel ON node_info(primary_channel)"
     )
 
@@ -436,58 +538,57 @@ def init_database() -> None:
         """
         )
         logging.info("Backfilled primary_channel values in node_info table")
+        conn.commit()
     except Exception as e:
         logging.warning(f"Could not backfill primary_channel column: {e}")
+        conn.rollback()
 
-    conn.commit()
-    conn.close()
-    logging.info(f"Database initialized: {DATABASE_FILE}")
+    cursor.close()
+    put_db_connection(conn)
+    logging.info("Database initialized")
 
 
 def load_node_cache() -> None:
     """Load node information from database into memory cache."""
     global node_cache
     with db_lock:
-        conn = sqlite3.connect(DATABASE_FILE, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        cursor.execute("""
-            SELECT node_id, hex_id, long_name, short_name, hw_model, role,
-                   is_licensed, mac_address, primary_channel, last_updated
-            FROM node_info
-        """)
+        try:
+            cursor.execute(
+                """
+                SELECT node_id, hex_id, long_name, short_name, hw_model, role,
+                       is_licensed, mac_address, primary_channel, last_updated
+                FROM node_info
+                """
+            )
 
-        rows = cursor.fetchall()
-        node_cache = {}
+            rows = cursor.fetchall()
+            node_cache = {}
 
-        for row in rows:
-            (
-                node_id,
-                hex_id,
-                long_name,
-                short_name,
-                hw_model,
-                role,
-                is_licensed,
-                mac_address,
-                primary_channel,
-                last_updated,
-            ) = row
-            node_cache[node_id] = {
-                "hex_id": hex_id,
-                "long_name": long_name,
-                "short_name": short_name,
-                "hw_model": hw_model,
-                "role": role,
-                "is_licensed": bool(is_licensed),
-                "mac_address": mac_address,
-                "primary_channel": primary_channel,
-                "last_updated": last_updated,
-            }
+            for row in rows:
+                node_id = row["node_id"]
+                node_cache[node_id] = {
+                    "hex_id": row["hex_id"],
+                    "long_name": row["long_name"],
+                    "short_name": row["short_name"],
+                    "hw_model": row["hw_model"],
+                    "role": row["role"],
+                    "is_licensed": bool(row["is_licensed"])
+                    if row["is_licensed"] is not None
+                    else None,
+                    "mac_address": row["mac_address"],
+                    "primary_channel": row["primary_channel"],
+                    "last_updated": row["last_updated"],
+                }
 
-        conn.close()
-        logging.info(f"Loaded {len(node_cache)} nodes into cache from database")
+            logging.info(f"Loaded {len(node_cache)} nodes into cache from database")
+        finally:
+            try:
+                cursor.close()
+            finally:
+                put_db_connection(conn)
 
 
 def update_node_cache(
@@ -541,103 +642,98 @@ def update_node_cache(
             node_cache[node_id]["primary_channel"] = primary_channel
         node_cache[node_id]["last_updated"] = current_time
 
-    # Update database using INSERT OR REPLACE to handle existing nodes
+    # Update database using INSERT ... ON CONFLICT to handle existing nodes
     with db_lock:
-        conn = sqlite3.connect(DATABASE_FILE, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Get existing values from database if node exists
-        cursor.execute(
-            "SELECT hex_id, long_name, short_name, hw_model, role, is_licensed, mac_address, primary_channel, first_seen FROM node_info WHERE node_id = ?",
-            (node_id,),
-        )
-        existing = cursor.fetchone()
-
-        if existing:
-            # Node exists, merge values (keep existing values if new values are None)
-            (
-                existing_hex_id,
-                existing_long_name,
-                existing_short_name,
-                existing_hw_model,
-                existing_role,
-                existing_is_licensed,
-                existing_mac_address,
-                existing_primary_channel,
-                _first_seen,
-            ) = existing
-            final_hex_id = hex_id if hex_id is not None else existing_hex_id
-            final_long_name = long_name if long_name is not None else existing_long_name
-            final_short_name = (
-                short_name if short_name is not None else existing_short_name
-            )
-            final_hw_model = hw_model if hw_model is not None else existing_hw_model
-            final_role = role if role is not None else existing_role
-            final_is_licensed = (
-                is_licensed if is_licensed is not None else existing_is_licensed
-            )
-            final_mac_address = (
-                mac_address if mac_address is not None else existing_mac_address
-            )
-            final_primary_channel = (
-                primary_channel
-                if primary_channel is not None
-                else existing_primary_channel
-            )
-
+        try:
+            # Get existing values from database if node exists
             cursor.execute(
-                """
-                UPDATE node_info
-                SET hex_id = ?, long_name = ?, short_name = ?, hw_model = ?, role = ?,
-                    is_licensed = ?, mac_address = ?, primary_channel = ?, last_updated = ?
-                WHERE node_id = ?
-            """,
-                (
-                    final_hex_id,
-                    final_long_name,
-                    final_short_name,
-                    final_hw_model,
-                    final_role,
-                    final_is_licensed,
-                    final_mac_address,
-                    final_primary_channel,
-                    current_time,
-                    node_id,
-                ),
+                "SELECT hex_id, long_name, short_name, hw_model, role, is_licensed, mac_address, primary_channel, first_seen FROM node_info WHERE node_id = %s",
+                (node_id,),
             )
+            existing = cursor.fetchone()
 
-            logging.debug(
-                f"Updated existing node in database: {node_id} ({final_hex_id})"
-            )
-        else:
-            # New node, insert it
-            cursor.execute(
-                """
-                INSERT INTO node_info
-                (node_id, hex_id, long_name, short_name, hw_model, role,
-                 is_licensed, mac_address, primary_channel, first_seen, last_updated)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    node_id,
-                    hex_id,
-                    long_name,
-                    short_name,
-                    hw_model,
-                    role,
-                    is_licensed,
-                    mac_address,
-                    primary_channel,
-                    current_time,
-                    current_time,
-                ),
-            )
+            if existing:
+                # Node exists, merge values (keep existing values if new values are None)
+                final_hex_id = hex_id if hex_id is not None else existing["hex_id"]
+                final_long_name = (
+                    long_name if long_name is not None else existing["long_name"]
+                )
+                final_short_name = (
+                    short_name if short_name is not None else existing["short_name"]
+                )
+                final_hw_model = hw_model if hw_model is not None else existing["hw_model"]
+                final_role = role if role is not None else existing["role"]
+                final_is_licensed = (
+                    is_licensed if is_licensed is not None else existing["is_licensed"]
+                )
+                final_mac_address = (
+                    mac_address if mac_address is not None else existing["mac_address"]
+                )
+                final_primary_channel = (
+                    primary_channel
+                    if primary_channel is not None
+                    else existing["primary_channel"]
+                )
 
-            logging.debug(f"Added new node to database: {node_id} ({hex_id})")
+                cursor.execute(
+                    """
+                    UPDATE node_info
+                    SET hex_id = %s, long_name = %s, short_name = %s, hw_model = %s, role = %s,
+                        is_licensed = %s, mac_address = %s, primary_channel = %s, last_updated = %s
+                    WHERE node_id = %s
+                """,
+                    (
+                        final_hex_id,
+                        final_long_name,
+                        final_short_name,
+                        final_hw_model,
+                        final_role,
+                        final_is_licensed,
+                        final_mac_address,
+                        final_primary_channel,
+                        current_time,
+                        node_id,
+                    ),
+                )
 
-        conn.commit()
-        conn.close()
+                logging.debug(
+                    f"Updated existing node in database: {node_id} ({final_hex_id})"
+                )
+            else:
+                # New node, insert it
+                cursor.execute(
+                    """
+                    INSERT INTO node_info
+                    (node_id, hex_id, long_name, short_name, hw_model, role,
+                     is_licensed, mac_address, primary_channel, first_seen, last_updated)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                    (
+                        node_id,
+                        hex_id,
+                        long_name,
+                        short_name,
+                        hw_model,
+                        role,
+                        is_licensed,
+                        mac_address,
+                        primary_channel,
+                        current_time,
+                        current_time,
+                    ),
+                )
+
+                logging.debug(f"Added new node to database: {node_id} ({hex_id})")
+
+            conn.commit()
+        finally:
+            try:
+                cursor.close()
+            finally:
+                put_db_connection(conn)
 
 
 def hex_id_to_numeric(hex_id: str) -> int | None:
@@ -774,85 +870,92 @@ def log_packet_to_database(
     tx_after = getattr(mesh_packet, "tx_after", None) if mesh_packet else None
 
     with db_lock:
-        conn = sqlite3.connect(DATABASE_FILE, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        cursor.execute(
-            """
-            INSERT INTO packet_history
-            (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name,
-             gateway_id, channel_id, mesh_packet_id, rssi, snr, hop_limit, hop_start, payload_length,
-             raw_payload, processed_successfully, via_mqtt, want_ack, priority, delayed,
-             channel_index, rx_time, pki_encrypted, next_hop, relay_node, tx_after,
-             message_type, raw_service_envelope, parsing_error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                current_time,
-                topic,
-                from_node_id,
-                to_node_id,
-                portnum,
-                portnum_name,
-                gateway_id,
-                channel_id,
-                mesh_packet_id,
-                rssi,
-                snr,
-                hop_limit,
-                hop_start,
-                payload_length,
-                raw_payload,
-                processed_successfully,
-                via_mqtt,
-                want_ack,
-                priority,
-                delayed,
-                channel_index,
-                rx_time,
-                pki_encrypted,
-                next_hop,
-                relay_node,
-                tx_after,
-                message_type,
-                raw_service_envelope_data,
-                parsing_error,
-            ),
-        )
+        try:
+            cursor.execute(
+                """
+                INSERT INTO packet_history
+                (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name,
+                 gateway_id, channel_id, mesh_packet_id, rssi, snr, hop_limit, hop_start, payload_length,
+                 raw_payload, processed_successfully, via_mqtt, want_ack, priority, delayed,
+                 channel_index, rx_time, pki_encrypted, next_hop, relay_node, tx_after,
+                 message_type, raw_service_envelope, parsing_error)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+                (
+                    current_time,
+                    topic,
+                    from_node_id,
+                    to_node_id,
+                    portnum,
+                    portnum_name,
+                    gateway_id,
+                    channel_id,
+                    mesh_packet_id,
+                    rssi,
+                    snr,
+                    hop_limit,
+                    hop_start,
+                    payload_length,
+                    raw_payload,
+                    processed_successfully,
+                    via_mqtt,
+                    want_ack,
+                    priority,
+                    delayed,
+                    channel_index,
+                    rx_time,
+                    pki_encrypted,
+                    next_hop,
+                    relay_node,
+                    tx_after,
+                    message_type,
+                    raw_service_envelope_data,
+                    parsing_error,
+                ),
+            )
 
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            try:
+                cursor.close()
+            finally:
+                put_db_connection(conn)
 
 
 def get_packet_history(
     limit: int = 100, node_id: int | None = None, portnum: int | None = None
 ) -> list[dict[str, Any]]:
-    """Get recent packet history from ..database."""
+    """Get recent packet history from database."""
     with db_lock:
-        conn = sqlite3.connect(DATABASE_FILE, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        query = "SELECT * FROM packet_history WHERE 1=1"
-        params = []
+        try:
+            query = "SELECT * FROM packet_history WHERE 1=1"
+            params = []
 
-        if node_id is not None:
-            query += " AND from_node_id = ?"
-            params.append(node_id)
+            if node_id is not None:
+                query += " AND from_node_id = %s"
+                params.append(node_id)
 
-        if portnum is not None:
-            query += " AND portnum = ?"
-            params.append(portnum)
+            if portnum is not None:
+                query += " AND portnum = %s"
+                params.append(portnum)
 
-        query += " ORDER BY timestamp DESC LIMIT ?"
-        params.append(limit)
+            query += " ORDER BY timestamp DESC LIMIT %s"
+            params.append(limit)
 
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        conn.close()
-
-        return rows
+            cursor.execute(query, params)
+            rows = [dict(row) for row in cursor.fetchall()]
+            return rows
+        finally:
+            try:
+                cursor.close()
+            finally:
+                put_db_connection(conn)
 
 
 def cleanup_old_data() -> None:
@@ -869,38 +972,58 @@ def cleanup_old_data() -> None:
     nodes_deleted = 0
 
     with db_lock:
-        conn = sqlite3.connect(DATABASE_FILE, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         try:
-            # Delete old packet history records
-            cursor.execute(
-                "DELETE FROM packet_history WHERE timestamp < ?", (cutoff_time,)
-            )
-            packets_deleted = cursor.rowcount
+            # Delete old packet history records in small batches to avoid long locks
+            while True:
+                cursor.execute(
+                    """
+                    DELETE FROM packet_history
+                    WHERE ctid IN (
+                        SELECT ctid FROM packet_history
+                        WHERE timestamp < %s
+                        ORDER BY timestamp ASC
+                        LIMIT 5000
+                    )
+                    """,
+                    (cutoff_time,),
+                )
+                batch_deleted = cursor.rowcount
+                packets_deleted += batch_deleted
+                conn.commit()
+                if batch_deleted < 5000:
+                    break
 
             # Delete node_info records for nodes that haven't been seen recently
             # and have no packets in the packet_history table
-            cursor.execute(
-                """
-                DELETE FROM node_info
-                WHERE last_updated < ?
-                AND node_id NOT IN (
-                    SELECT DISTINCT from_node_id FROM packet_history WHERE from_node_id IS NOT NULL
-                    UNION
-                    SELECT DISTINCT to_node_id FROM packet_history WHERE to_node_id IS NOT NULL
+            while True:
+                cursor.execute(
+                    """
+                    DELETE FROM node_info
+                    WHERE ctid IN (
+                        SELECT ctid FROM node_info
+                        WHERE last_updated < %s
+                        AND node_id NOT IN (
+                            SELECT DISTINCT from_node_id FROM packet_history WHERE from_node_id IS NOT NULL
+                            UNION
+                            SELECT DISTINCT to_node_id FROM packet_history WHERE to_node_id IS NOT NULL
+                        )
+                        LIMIT 1000
+                    )
+                    """,
+                    (cutoff_time,),
                 )
-                """,
-                (cutoff_time,),
-            )
-            nodes_deleted = cursor.rowcount
-
-            conn.commit()
+                batch_nodes_deleted = cursor.rowcount
+                nodes_deleted += batch_nodes_deleted
+                conn.commit()
+                if batch_nodes_deleted < 1000:
+                    break
 
             if packets_deleted > 0 or nodes_deleted > 0:
                 logging.info(
-                    f"🧹 Cleaned up {packets_deleted} old packets and {nodes_deleted} unused nodes "
+                    f"Cleaned up {packets_deleted} old packets and {nodes_deleted} unused nodes "
                     f"older than {DATA_RETENTION_HOURS} hours"
                 )
             else:
@@ -912,7 +1035,10 @@ def cleanup_old_data() -> None:
             logging.error(f"Error during data cleanup: {e}")
             conn.rollback()
         finally:
-            conn.close()
+            try:
+                cursor.close()
+            finally:
+                put_db_connection(conn)
 
 
 def cleanup_worker() -> None:
@@ -923,7 +1049,7 @@ def cleanup_worker() -> None:
     cleanup_old_data()
 
     # Then run cleanup every hour
-    while not stop_cleanup.wait(3600):  # Wait for 1 hour or until stop signal
+    while not stop_cleanup.wait(DATA_CLEANUP_INTERVAL_SECONDS):
         cleanup_old_data()
 
     logging.info("Cleanup worker thread stopped")
@@ -932,43 +1058,45 @@ def cleanup_worker() -> None:
 def get_node_statistics() -> dict[str, Any]:
     """Get statistics about known nodes."""
     with db_lock:
-        conn = sqlite3.connect(DATABASE_FILE, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Total nodes
-        cursor.execute("SELECT COUNT(*) FROM node_info")
-        total_nodes = cursor.fetchone()[0]
+        try:
+            # Total nodes
+            cursor.execute("SELECT COUNT(*) as count FROM node_info")
+            total_nodes = cursor.fetchone()["count"]
 
-        # Nodes with names
-        cursor.execute("SELECT COUNT(*) FROM node_info WHERE long_name IS NOT NULL")
-        nodes_with_long_names = cursor.fetchone()[0]
+            # Nodes with names
+            cursor.execute("SELECT COUNT(*) as count FROM node_info WHERE long_name IS NOT NULL")
+            nodes_with_long_names = cursor.fetchone()["count"]
 
-        # Recent packet senders (last 24 hours)
-        twenty_four_hours_ago = time.time() - (24 * 3600)
-        cursor.execute(
-            """
-            SELECT COUNT(DISTINCT from_node_id)
-            FROM packet_history
-            WHERE timestamp > ? AND from_node_id IS NOT NULL
-        """,
-            (twenty_four_hours_ago,),
-        )
-        active_nodes_24h = cursor.fetchone()[0]
+            # Recent packet senders (last 24 hours)
+            twenty_four_hours_ago = time.time() - (24 * 3600)
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT from_node_id) as count
+                FROM packet_history
+                WHERE timestamp > %s AND from_node_id IS NOT NULL
+            """,
+                (twenty_four_hours_ago,),
+            )
+            active_nodes_24h = cursor.fetchone()["count"]
 
-        # Total packets received
-        cursor.execute("SELECT COUNT(*) FROM packet_history")
-        total_packets = cursor.fetchone()[0]
+            # Total packets received
+            cursor.execute("SELECT COUNT(*) as count FROM packet_history")
+            total_packets = cursor.fetchone()["count"]
 
-        conn.close()
-
-        return {
-            "total_nodes": total_nodes,
-            "nodes_with_long_names": nodes_with_long_names,
-            "active_nodes_24h": active_nodes_24h,
-            "total_packets": total_packets,
-            "cache_size": len(node_cache),
-        }
+            return {
+                "total_nodes": total_nodes,
+                "nodes_with_long_names": nodes_with_long_names,
+                "active_nodes_24h": active_nodes_24h,
+                "total_packets": total_packets,
+            }
+        finally:
+            try:
+                cursor.close()
+            finally:
+                put_db_connection(conn)
 
 
 def format_hop_info(mesh_packet: Any) -> str:
@@ -1003,7 +1131,7 @@ def on_connect(
         logging.info(f"Connected successfully to MQTT Broker: {MQTT_BROKER_ADDRESS}")
         # Subscribe to the Meshtastic topics
         topic_to_subscribe = f"{MQTT_TOPIC_PREFIX}{MQTT_TOPIC_SUFFIX}"
-        client.subscribe(topic_to_subscribe)
+        client.subscribe(topic_to_subscribe, qos=MQTT_QOS)
         logging.info(f"Subscribed to MQTT topic: {topic_to_subscribe}")
     else:
         logging.error(f"Failed to connect to MQTT Broker, return code {rc}")
@@ -1021,9 +1149,19 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
     """Callback for when a PUBLISH message is received from the server."""
     logging.debug(f"Received message on topic {msg.topic}: {len(msg.payload)} bytes")
 
+    with ingest_stats_lock:
+        ingest_stats["received"] += 1
+    PACKETS_RECEIVED.inc()
+
     # Skip JSON messages - we only want protobuf messages
     if "/json/" in msg.topic:
         logging.debug(f"Skipping JSON message on topic {msg.topic}")
+        return
+
+    # Skip status/housekeeping topics that don't carry ServiceEnvelope protobufs
+    topic_parts = msg.topic.split("/")
+    if len(topic_parts) >= 4 and topic_parts[3] == "stat":
+        logging.debug(f"Skipping status topic (no protobuf expected): {msg.topic}")
         return
 
     logging.debug(f"Processing protobuf message on topic {msg.topic}")
@@ -1086,6 +1224,15 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
             decryption_successful = try_decrypt_mesh_packet(
                 mesh_packet, channel_name=""
             )
+            with ingest_stats_lock:
+                if decryption_successful:
+                    ingest_stats["decrypt_success"] += 1
+                else:
+                    ingest_stats["decrypt_failed"] += 1
+            if decryption_successful:
+                PACKETS_DECRYPT_SUCCESS.inc()
+            else:
+                PACKETS_DECRYPT_FAILED.inc()
 
             # If primary channel decryption failed and we have a channel name, try with channel-specific keys
             if not decryption_successful and channel_name:
@@ -1096,14 +1243,23 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
                     mesh_packet,
                     channel_name=channel_name,
                 )
+                with ingest_stats_lock:
+                    if decryption_successful:
+                        ingest_stats["decrypt_success"] += 1
+                    else:
+                        ingest_stats["decrypt_failed"] += 1
+                if decryption_successful:
+                    PACKETS_DECRYPT_SUCCESS.inc()
+                else:
+                    PACKETS_DECRYPT_FAILED.inc()
 
             if decryption_successful:
                 logging.info(
-                    f"🔓 Successfully decrypted packet from {get_node_display_name(from_node_id_numeric)}"
+                    f"Successfully decrypted packet from {get_node_display_name(from_node_id_numeric)}"
                 )
             else:
                 logging.debug(
-                    f"🔒 Could not decrypt packet {mesh_packet.id} from {from_node_id_numeric}"
+                    f"Could not decrypt packet {mesh_packet.id} from {from_node_id_numeric}"
                 )
 
         # Update node cache with gateway hex ID if we can determine the numeric ID
@@ -1137,7 +1293,7 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
             flags_str = f" ({', '.join(flags)})" if flags else ""
 
             logging.info(
-                f"💬 Text message from {from_node_display} to {to_node_display}{flags_str}: {text_content[:50]}{'...' if len(text_content) > 50 else ''}"
+                f"Text message from {from_node_display} to {to_node_display}{flags_str}: {text_content[:50]}{'...' if len(text_content) > 50 else ''}"
             )
             processed_successfully = True
 
@@ -1154,7 +1310,7 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
                 " (via MQTT)" if getattr(mesh_packet, "via_mqtt", False) else ""
             )
             logging.info(
-                f"📍 Position from {from_node_display}{via_mqtt_str}: {lat:.5f}, {lon:.5f} (alt: {alt}m)"
+                f"Position from {from_node_display}{via_mqtt_str}: {lat:.5f}, {lon:.5f} (alt: {alt}m)"
             )
             processed_successfully = True
 
@@ -1199,7 +1355,7 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
                 " (via MQTT)" if getattr(mesh_packet, "via_mqtt", False) else ""
             )
             logging.info(
-                f"ℹ️ NodeInfo for {node_id_from_payload} from {from_node_display}{via_mqtt_str}: {long_name or short_name or 'No name'}"
+                f"NodeInfo for {node_id_from_payload} from {from_node_display}{via_mqtt_str}: {long_name or short_name or 'No name'}"
             )
             processed_successfully = True
 
@@ -1225,12 +1381,12 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
                     else "N/A"
                 )
                 logging.info(
-                    f"📊 Device telemetry from {from_node_display}{via_mqtt_str}: Battery {battery}, Voltage {voltage}"
+                    f"Device telemetry from {from_node_display}{via_mqtt_str}: Battery {battery}, Voltage {voltage}"
                 )
             elif telemetry_data.HasField("environment_metrics"):
                 metrics = telemetry_data.environment_metrics
                 temp = (
-                    f"{metrics.temperature:.1f}°C"
+                    f"{metrics.temperature:.1f}C"
                     if metrics.HasField("temperature")
                     else "N/A"
                 )
@@ -1240,28 +1396,52 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
                     else "N/A"
                 )
                 logging.info(
-                    f"📊 Environment telemetry from {from_node_display}{via_mqtt_str}: Temp {temp}, Humidity {humidity}"
+                    f"Environment telemetry from {from_node_display}{via_mqtt_str}: Temp {temp}, Humidity {humidity}"
                 )
             else:
                 logging.info(
-                    f"📊 Telemetry from {from_node_display}{via_mqtt_str}: Unknown type"
+                    f"Telemetry from {from_node_display}{via_mqtt_str}: Unknown type"
                 )
 
             processed_successfully = True
 
         elif mesh_packet.decoded.portnum == portnums_pb2.PortNum.MAP_REPORT_APP:
-            # Handle MAP_REPORT_APP packets specifically
-            from_node_display = get_node_display_name(from_node_id_numeric)
-            via_mqtt_str = (
-                " (via MQTT)" if getattr(mesh_packet, "via_mqtt", False) else ""
-            )
+            # Handle MAP_REPORT_APP packets - extract Position data similar to POSITION_APP
+            try:
+                # MapReport packets contain Position messages
+                position_data = mesh_pb2.Position()
+                position_data.ParseFromString(mesh_packet.decoded.payload)
 
-            # Log MAP_REPORT packet (protobuf structure may not be available)
-            logging.info(
-                f"🗺️ MAP_REPORT from {from_node_display}{via_mqtt_str}: {len(mesh_packet.decoded.payload)} bytes"
-            )
+                lat = position_data.latitude_i / 1e7 if position_data.latitude_i else None
+                lon = position_data.longitude_i / 1e7 if position_data.longitude_i else None
+                alt = position_data.altitude if position_data.altitude else None
 
-            processed_successfully = True
+                from_node_display = get_node_display_name(from_node_id_numeric)
+                via_mqtt_str = (
+                    " (via MQTT)" if getattr(mesh_packet, "via_mqtt", False) else ""
+                )
+
+                if lat is not None and lon is not None:
+                    alt_str = f"{alt}m" if alt else "N/A"
+                    logging.info(
+                        f"MapReport position from {from_node_display}{via_mqtt_str}: {lat:.5f}, {lon:.5f} (alt: {alt_str})"
+                    )
+                else:
+                    logging.info(
+                        f"MAP_REPORT from {from_node_display}{via_mqtt_str}: {len(mesh_packet.decoded.payload)} bytes (no position data)"
+                    )
+
+                processed_successfully = True
+            except Exception as e:
+                # If parsing fails, log as generic MAP_REPORT packet
+                from_node_display = get_node_display_name(from_node_id_numeric)
+                via_mqtt_str = (
+                    " (via MQTT)" if getattr(mesh_packet, "via_mqtt", False) else ""
+                )
+                logging.warning(
+                    f"MAP_REPORT from {from_node_display}{via_mqtt_str}: Failed to parse position data: {e}"
+                )
+                processed_successfully = True  # Still mark as processed to store the packet
 
         else:
             port_name = portnums_pb2.PortNum.Name(mesh_packet.decoded.portnum)
@@ -1274,27 +1454,33 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
             if mesh_packet.decoded.portnum == portnums_pb2.PortNum.UNKNOWN_APP:
                 if is_encrypted_packet:
                     logging.info(
-                        f"🔒 Encrypted packet {port_name} from {from_node_display}{via_mqtt_str} (decryption failed)"
+                        f"Encrypted packet {port_name} from {from_node_display}{via_mqtt_str} (decryption failed)"
                     )
                 else:
                     logging.info(
-                        f"📦 Unknown packet type {port_name} from {from_node_display}{via_mqtt_str}"
+                        f"Unknown packet type {port_name} from {from_node_display}{via_mqtt_str}"
                     )
             else:
                 logging.info(
-                    f"📦 Packet type {port_name} from {from_node_display}{via_mqtt_str}: {len(mesh_packet.decoded.payload) if hasattr(mesh_packet.decoded, 'payload') else 0} bytes"
+                    f"Packet type {port_name} from {from_node_display}{via_mqtt_str}: {len(mesh_packet.decoded.payload) if hasattr(mesh_packet.decoded, 'payload') else 0} bytes"
                 )
             processed_successfully = True
 
     except UnicodeDecodeError as e:
         parsing_error = f"Unicode decode error: {str(e)}"
         logging.warning(f"Could not decode payload as UTF-8 on topic {msg.topic}: {e}")
+        with ingest_stats_lock:
+            ingest_stats["parse_failed"] += 1
+        PACKETS_PARSE_FAILED.inc()
     except Exception as e:
         parsing_error = f"Parsing error: {str(e)}"
         logging.error(
             f"Error processing MQTT protobuf message on topic {msg.topic}: {e}"
         )
         logging.debug(f"Raw payload length: {len(msg.payload)} bytes")
+        with ingest_stats_lock:
+            ingest_stats["parse_failed"] += 1
+        PACKETS_PARSE_FAILED.inc()
 
     # Always log packet to database, regardless of parsing success
     try:
@@ -1312,13 +1498,18 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
     # Log statistics for different message types
     if message_type and processed_successfully:
         if message_type == "e":
-            logging.debug("📧 Processed encrypted message")
+            logging.debug("Processed encrypted message")
         elif message_type == "c":
-            logging.debug("⚙️ Processed command message")
+            logging.debug("Processed command message")
         elif message_type == "p":
-            logging.debug("📍 Processed position message")
+            logging.debug("Processed position message")
         else:
-            logging.debug(f"📦 Processed message type: {message_type}")
+            logging.debug(f"Processed message type: {message_type}")
+
+    if processed_successfully:
+        with ingest_stats_lock:
+            ingest_stats["parsed_ok"] += 1
+        PACKETS_PARSED.inc()
 
 
 def on_disconnect(
@@ -1333,15 +1524,11 @@ def on_disconnect(
     if rc != 0:
         logging.error("Unexpected MQTT disconnection. Will attempt to reconnect.")
 
-        # Implement exponential backoff retry logic
-        max_retries = 10
-        base_delay = 1  # Start with 1 second
-        max_delay = 60  # Cap at 60 seconds
-
-        for attempt in range(max_retries):
-            delay = min(base_delay * (2**attempt), max_delay)
+        # Implement configurable exponential backoff retry logic
+        for attempt in range(MQTT_RECONNECT_MAX_RETRIES):
+            delay = min(MQTT_RECONNECT_BASE_DELAY * (2**attempt), MQTT_RECONNECT_MAX_DELAY)
             logging.info(
-                f"Reconnection attempt {attempt + 1}/{max_retries} in {delay} seconds..."
+                f"Reconnection attempt {attempt + 1}/{MQTT_RECONNECT_MAX_RETRIES} in {delay} seconds..."
             )
             time.sleep(delay)
 
@@ -1363,7 +1550,9 @@ def on_disconnect(
             except Exception as e:
                 logging.warning(f"Reconnection attempt {attempt + 1} failed: {e}")
 
-        logging.error(f"Failed to reconnect after {max_retries} attempts. Giving up.")
+        logging.error(
+            f"Failed to reconnect after {MQTT_RECONNECT_MAX_RETRIES} attempts. Giving up."
+        )
     else:
         logging.info("Clean disconnection from MQTT broker")
 
@@ -1371,7 +1560,15 @@ def on_disconnect(
 # --- Main ---
 def main() -> None:
     """Main function to start the MQTT client."""
-    logging.info("Starting Meshtastic MQTT to SQLite capture tool...")
+    logging.info("Starting Meshtastic MQTT to PostgreSQL capture tool...")
+
+    # Start Prometheus metrics exporter if enabled
+    if METRICS_ENABLED:
+        try:
+            start_http_server(METRICS_PORT)
+            logging.info(f"Metrics exporter started on port {METRICS_PORT}")
+        except Exception as exc:  # noqa: BLE001
+            logging.warning(f"Failed to start metrics exporter: {exc}")
 
     # Initialize database and load node cache
     logging.info("Initializing database...")
@@ -1379,7 +1576,17 @@ def main() -> None:
     load_node_cache()
 
     # Initialize MQTT Client
-    mqtt_client = mqtt.Client(CallbackAPIVersion.VERSION2)
+    mqtt_client = mqtt.Client(CallbackAPIVersion.VERSION2, clean_session=MQTT_CLEAN_SESSION)
+
+    # Configure TLS if enabled
+    if MQTT_TLS_ENABLED:
+        mqtt_client.tls_set(
+            ca_certs=MQTT_TLS_CA_CERT,
+            certfile=MQTT_TLS_CLIENT_CERT,
+            keyfile=MQTT_TLS_CLIENT_KEY,
+        )
+        if MQTT_TLS_INSECURE:
+            mqtt_client.tls_insecure_set(True)
 
     if MQTT_USERNAME:
         mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
@@ -1391,9 +1598,9 @@ def main() -> None:
     # Attempt to connect
     try:
         logging.info(
-            f"Connecting to MQTT broker at {MQTT_BROKER_ADDRESS}:{MQTT_PORT}..."
+            f"Connecting to MQTT broker at {MQTT_BROKER_ADDRESS}:{MQTT_PORT} (keepalive={MQTT_KEEPALIVE}, tls={MQTT_TLS_ENABLED})..."
         )
-        mqtt_client.connect(MQTT_BROKER_ADDRESS, MQTT_PORT, 60)
+        mqtt_client.connect(MQTT_BROKER_ADDRESS, MQTT_PORT, MQTT_KEEPALIVE)
     except ConnectionRefusedError:
         logging.error(
             f"Connection to MQTT broker {MQTT_BROKER_ADDRESS}:{MQTT_PORT} refused. Check address/port and broker status."
@@ -1410,7 +1617,7 @@ def main() -> None:
 
     # Start the MQTT client loop
     mqtt_client.loop_start()
-    logging.info("MQTT client loop started. Capturing packets to SQLite database...")
+    logging.info("MQTT client loop started. Capturing packets to database...")
 
     # Print initial statistics
     stats = get_node_statistics()
@@ -1418,20 +1625,43 @@ def main() -> None:
         f"Database stats: {stats['total_nodes']} nodes, {stats['total_packets']} packets, {stats['active_nodes_24h']} active nodes (24h)"
     )
 
-    # Start the cleanup thread
+    # Start the cleanup thread only when enabled
     global cleanup_thread
-    stop_cleanup.clear()
-    cleanup_thread = threading.Thread(target=cleanup_worker, daemon=True)
-    cleanup_thread.start()
-    logging.info("Data cleanup thread started.")
+    if DATA_RETENTION_HOURS > 0:
+        stop_cleanup.clear()
+        cleanup_thread = threading.Thread(target=cleanup_worker, daemon=True)
+        cleanup_thread.start()
+        logging.info(
+            "Data cleanup thread started (interval=%ss, retention=%sh)",
+            DATA_CLEANUP_INTERVAL_SECONDS,
+            DATA_RETENTION_HOURS,
+        )
+    else:
+        logging.info("Data retention disabled; cleanup worker not started.")
 
     try:
         # Keep the main thread alive
         while True:
             time.sleep(60)  # Print stats every minute
             stats = get_node_statistics()
+            with ingest_stats_lock:
+                ingest_snapshot = ingest_stats.copy()
+                # Reset counters after reporting
+                for k in ingest_stats:
+                    ingest_stats[k] = 0
+            try:
+                ACTIVE_THREADS.set(threading.active_count())
+            except Exception:
+                pass
             logging.info(
-                f"Stats: {stats['total_nodes']} nodes, {stats['total_packets']} packets, {stats['active_nodes_24h']} active (24h)"
+                "Stats: %(total_nodes)s nodes, %(total_packets)s packets, "
+                "%(active_nodes_24h)s active (24h) | ingest: "
+                "%(received)s received, %(parsed_ok)s ok, %(parse_failed)s failed, "
+                "%(decrypt_success)s decrypted, %(decrypt_failed)s decrypt_failed",
+                {
+                    **stats,
+                    **ingest_snapshot,
+                },
             )
     except KeyboardInterrupt:
         logging.info("Script interrupted by user. Shutting down...")
@@ -1450,7 +1680,7 @@ def main() -> None:
         mqtt_client.loop_stop()
         logging.info("Disconnecting from MQTT broker...")
         mqtt_client.disconnect()
-        logging.info("Meshtastic MQTT to SQLite capture tool stopped.")
+        logging.info("Meshtastic MQTT to PostgreSQL capture tool stopped.")
 
 
 if __name__ == "__main__":

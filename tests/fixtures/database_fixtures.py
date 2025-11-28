@@ -7,6 +7,7 @@ for integration testing of the API endpoints and services.
 
 import logging
 import sqlite3
+import os
 import time
 from typing import Any
 
@@ -32,7 +33,11 @@ class DatabaseFixtures:
         self.test_node_info = self.create_sample_node_info()
 
     def create_test_database(self, db_path: str):
-        """Create a complete test database with fixture data."""
+        """Create a complete test database with fixture data.
+
+        NOTE: This fixture is SQLite-only. In Postgres-only mode, prefer
+        the Postgres fixture helper (see tests/conftest) or port this data.
+        """
         logger.info(f"Creating test database at {db_path}")
 
         with sqlite3.connect(db_path) as conn:

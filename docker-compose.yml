@@ -1,11 +1,24 @@
-version: '3.8'
-
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-meshtastic_history}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   malla-web:
-    # Use pre-built image by default, override with 'build: .' for development
-    image: ${MALLA_IMAGE:-ghcr.io/zenitram/malla:latest}
-    # Uncomment the following line for local development:
-    # build: .
+    build: .
+    image: malla:local
 
     # Choose between Flask dev server and Gunicorn
     # Default: Flask development server (malla-web)
@@ -17,7 +30,12 @@ services:
     environment:
       - MALLA_HOST=0.0.0.0
       - MALLA_PORT=5008
-      - MALLA_DATABASE_FILE=/app/data/meshtastic_history.db
+      - MALLA_DATABASE_HOST=postgres
+      - MALLA_DATABASE_PORT=5432
+      - MALLA_DATABASE_NAME=${POSTGRES_DB:-meshtastic_history}
+      - MALLA_DATABASE_USER=${POSTGRES_USER:-postgres}
+      - MALLA_DATABASE_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - MALLA_DB_POOL_MAX=100
       - MALLA_NAME=${MALLA_NAME:-Malla}
       - MALLA_SECRET_KEY=${MALLA_SECRET_KEY:-dev-secret-key-change-in-production}
       - MALLA_DEBUG=${MALLA_DEBUG:-false}
@@ -27,16 +45,22 @@ services:
       # - ./config.yaml:/app/config.yaml:ro
     restart: unless-stopped
     depends_on:
-      - malla-capture
+      postgres:
+        condition: service_healthy
+      malla-capture:
+        condition: service_started
 
   malla-capture:
-    # Use pre-built image by default, override with 'build: .' for development
-    image: ${MALLA_IMAGE:-ghcr.io/zenitram/malla:latest}
-    # Uncomment the following line for local development:
-    # build: .
+    build: .
+    image: malla:local
     command: ["/app/.venv/bin/malla-capture"]
     environment:
-      - MALLA_DATABASE_FILE=/app/data/meshtastic_history.db
+      - MALLA_DATABASE_HOST=postgres
+      - MALLA_DATABASE_PORT=5432
+      - MALLA_DATABASE_NAME=${POSTGRES_DB:-meshtastic_history}
+      - MALLA_DATABASE_USER=${POSTGRES_USER:-postgres}
+      - MALLA_DATABASE_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - MALLA_DB_POOL_MAX=100
       # MQTT Configuration - set these in your .env file
       - MALLA_MQTT_BROKER_ADDRESS=${MALLA_MQTT_BROKER_ADDRESS}
       - MALLA_MQTT_PORT=${MALLA_MQTT_PORT:-1883}
@@ -50,6 +74,10 @@ services:
       # Optional: mount your own config file (uncomment if you have one)
       # - ./config.yaml:/app/config.yaml:ro
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   malla_data:
+  postgres_data:

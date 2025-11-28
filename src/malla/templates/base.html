@@ -104,6 +104,16 @@
             height: 100%;
             max-height: 100%;
         }
+
+        /* Live map marker animations */
+        .live-map-broadcast {
+            animation: pulse-broadcast 1.2s ease-in-out 2;
+        }
+        @keyframes pulse-broadcast {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(13, 110, 253, 0.4); }
+            50% { transform: scale(1.3); box-shadow: 0 0 0 12px rgba(13, 110, 253, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(13, 110, 253, 0); }
+        }
     </style>
 
     {% block extra_css %}{% endblock %}
@@ -154,6 +164,20 @@
                     <li class="nav-item">
                         <a class="nav-link {{ 'active' if request.endpoint == 'main.map_view' }}" href="{{ url_for('main.map_view') }}">
                             <i class="bi bi-map"></i> Map
+                        </a>
+                    </li>
+
+                    <!-- Chat -->
+                    <li class="nav-item">
+                        <a class="nav-link {{ 'active' if request.endpoint == 'main.chat_view' }}" href="{{ url_for('main.chat_view') }}">
+                            <i class="bi bi-chat-dots"></i> Chat
+                        </a>
+                    </li>
+
+                    <!-- Live Map -->
+                    <li class="nav-item">
+                        <a class="nav-link {{ 'active' if request.endpoint == 'main.live_map_view' }}" href="{{ url_for('main.live_map_view') }}">
+                            <i class="bi bi-broadcast-pin"></i> Live Map
                         </a>
                     </li>
 

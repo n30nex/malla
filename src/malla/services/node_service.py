@@ -127,7 +127,7 @@ class NodeService:
         Returns:
             Dictionary containing related nodes and their RF hop counts
         """
-        from ..database import get_db_connection
+        from ..database.connection import get_db_connection, put_db_connection
         from ..models.traceroute import TraceroutePacket
 
         node_id_int = convert_node_id(node_id)
@@ -151,10 +151,10 @@ class NodeService:
                 raw_payload
             FROM packet_history
             WHERE portnum_name = 'TRACEROUTE_APP'
-            AND processed_successfully = 1
+            AND processed_successfully = TRUE
             AND raw_payload IS NOT NULL
-            AND timestamp >= ?
-            AND timestamp <= ?
+            AND timestamp >= %s
+            AND timestamp <= %s
         """
 
         cursor.execute(query, (start_time.timestamp(), end_time.timestamp()))
@@ -238,7 +238,14 @@ class NodeService:
         else:
             node_info_data = {}
 
-        conn.close()
+        cursor.close()
+        try:
+            put_db_connection(conn)
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
         # Format the response
         formatted_related_nodes = []

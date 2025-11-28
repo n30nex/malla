@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Chat - {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3">
+    <div class="d-flex align-items-center mb-3">
+        <div>
+            <h2 class="mb-0">Chat</h2>
+            <small class="text-muted">Live text messages from the mesh.</small>
+        </div>
+        <div class="ms-auto d-flex align-items-center gap-3">
+            <span class="badge bg-success" id="chat-status">Live</span>
+            <span class="text-muted small">Messages: <span id="chat-count">0</span></span>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body">
+            <div class="row g-3 mb-3">
+                <div class="col-sm-4 col-md-3 col-lg-2">
+                    <input type="text" class="form-control form-control-sm" id="filter-text" placeholder="Search text...">
+                </div>
+                <div class="col-sm-4 col-md-3 col-lg-2">
+                    <input type="text" class="form-control form-control-sm" id="filter-from" placeholder="From node (!abcd1234)">
+                </div>
+                <div class="col-sm-4 col-md-3 col-lg-2">
+                    <select class="form-select form-select-sm" id="filter-limit">
+                        <option value="50">Last 50</option>
+                        <option value="100">Last 100</option>
+                        <option value="250">Last 250</option>
+                        <option value="500" selected>Last 500</option>
+                    </select>
+                </div>
+                <div class="col-sm-4 col-md-3 col-lg-2 d-flex gap-2">
+                    <button class="btn btn-sm btn-primary" id="chat-refresh">Refresh</button>
+                    <button class="btn btn-sm btn-outline-secondary" id="chat-pause">Pause</button>
+                </div>
+            </div>
+
+            <div id="chat-list" class="chat-list" style="max-height: 70vh; overflow-y: auto;">
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+{% endblock %}

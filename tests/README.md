@@ -55,7 +55,7 @@ The test suite uses a completely separate SQLite database created with realistic
 
 The test database is created fresh for each test session and automatically cleaned up.
 
-## Quick Start
+## Quick Start (SQLite fixtures by default; port fixtures for PostgreSQL)
 
 ### 1. Install Test Dependencies
 
@@ -189,12 +189,14 @@ The coverage report shows:
 
 ## Test Data Summary
 
-The fixture database contains:
+SQLite fixture database (default) contains:
 - **5 nodes** representing different hardware and roles
 - **120 regular packets** (text, position, node info)
 - **12 traceroute packets** with various path scenarios
 - **280 location records** showing movement patterns
 - **Realistic timestamps** spanning the last 7 days
+
+PostgreSQL: port these fixtures or generate equivalent data before running tests in PG-only mode.
 
 ## Continuous Integration
 
@@ -254,6 +256,13 @@ conn = sqlite3.connect(test_database)
 cursor = conn.cursor()
 cursor.execute("SELECT COUNT(*) FROM packet_history")
 print(f"Packet count: {cursor.fetchone()[0]}")
+
+# PostgreSQL example (when fixtures are ported)
+# import psycopg2
+# conn = psycopg2.connect("postgresql://user:pass@localhost:5432/meshtastic_history")
+# cursor = conn.cursor()
+# cursor.execute("SELECT COUNT(*) FROM packet_history")
+# print(cursor.fetchone()[0])
 ```
 
 ## Best Practices

@@ -17,8 +17,16 @@ home_markdown: |
 # Secret key used by Flask for session signing (change for production!)
 secret_key: "dev-secret-key-change-in-production"
 
-# SQLite database file path (relative or absolute)
-database_file: "meshtastic_history.db"
+# PostgreSQL database configuration (required)
+# Option 1: Use a connection string (recommended)
+# database_url: "postgresql://user:password@localhost:5432/meshtastic_history"
+
+# Option 2: Use individual parameters
+# database_host: "localhost"
+# database_port: 5432
+# database_name: "meshtastic_history"
+# database_user: "postgres"
+# database_password: "your_password"
 
 # Host interface and port for the web server
 host: "0.0.0.0"
@@ -40,6 +48,19 @@ debug: false
 # mqtt_password: ""  # optional
 # mqtt_topic_prefix: "msh"
 # mqtt_topic_suffix: "/+/+/+/#"
+# mqtt_keepalive: 60
+# mqtt_qos: 0
+# mqtt_clean_session: true
+
+# MQTT TLS (optional)
+# mqtt_tls_enabled: false
+# mqtt_tls_ca_cert: "/path/to/ca.crt"
+# mqtt_tls_client_cert: "/path/to/client.crt"
+# mqtt_tls_client_key: "/path/to/client.key"
+# mqtt_tls_insecure: false
+# mqtt_reconnect_max_retries: 10
+# mqtt_reconnect_base_delay: 1     # seconds (exponential backoff start)
+# mqtt_reconnect_max_delay: 60     # seconds (cap)
 
 # Default channel key(s) used for decrypting secondary channels (base64)
 # Supports multiple comma-separated keys - each key will be tried in order
@@ -51,6 +72,12 @@ debug: false
 
 # Number of hours after which to delete old data (0 = never delete)
 # data_retention_hours: 0
+# Cleanup interval in seconds (default: 3600)
+# data_cleanup_interval_seconds: 3600
+
+# Metrics (Prometheus)
+# metrics_enabled: false
+# metrics_port: 9100
 
 # OpenTelemetry settings
 # Endpoint for sending traces (e.g. "http://localhost:4317")

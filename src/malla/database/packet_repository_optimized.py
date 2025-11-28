@@ -7,7 +7,10 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+from psycopg2.extras import RealDictCursor
+
 from . import get_db_connection
+from .connection import put_db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -29,69 +32,71 @@ class PacketRepositoryOptimized:
         if filters is None:
             filters = {}
 
+        conn = None
+        cursor = None
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Build WHERE clause
             where_conditions = []
             params = []
 
             if filters.get("start_time"):
-                where_conditions.append("timestamp >= ?")
+                where_conditions.append("timestamp >= %s")
                 params.append(filters["start_time"])
 
             if filters.get("end_time"):
-                where_conditions.append("timestamp <= ?")
+                where_conditions.append("timestamp <= %s")
                 params.append(filters["end_time"])
 
             if filters.get("from_node"):
-                where_conditions.append("from_node_id = ?")
+                where_conditions.append("from_node_id = %s")
                 params.append(filters["from_node"])
 
             if filters.get("to_node"):
-                where_conditions.append("to_node_id = ?")
+                where_conditions.append("to_node_id = %s")
                 params.append(filters["to_node"])
 
             if filters.get("portnum"):
-                where_conditions.append("portnum_name = ?")
+                where_conditions.append("portnum_name = %s")
                 params.append(filters["portnum"])
 
             if filters.get("min_rssi"):
-                where_conditions.append("rssi >= ?")
+                where_conditions.append("rssi >= %s")
                 params.append(filters["min_rssi"])
 
             if filters.get("max_rssi"):
-                where_conditions.append("rssi <= ?")
+                where_conditions.append("rssi <= %s")
                 params.append(filters["max_rssi"])
 
             if filters.get("gateway_id"):
-                where_conditions.append("gateway_id = ?")
+                where_conditions.append("gateway_id = %s")
                 params.append(filters["gateway_id"])
 
             if filters.get("hop_count") is not None:
-                where_conditions.append("(hop_start - hop_limit) = ?")
+                where_conditions.append("(hop_start - hop_limit) = %s")
                 params.append(filters["hop_count"])
 
             # Generic exclusion filters for from/to node IDs
             # Optimized: Use simple != condition to allow index usage
             if filters.get("exclude_from") is not None:
-                where_conditions.append("from_node_id != ?")
+                where_conditions.append("from_node_id != %s")
                 params.append(filters["exclude_from"])
 
             if filters.get("exclude_to") is not None:
-                where_conditions.append("to_node_id != ?")
+                where_conditions.append("to_node_id != %s")
                 params.append(filters["exclude_to"])
 
             # Search functionality
             if search:
                 # Search in multiple text fields
                 search_condition = """(
-                    portnum_name LIKE ? OR
-                    gateway_id LIKE ? OR
-                    channel_id LIKE ? OR
-                    CAST(from_node_id AS TEXT) LIKE ? OR
-                    CAST(to_node_id AS TEXT) LIKE ?
+                    portnum_name LIKE %s OR
+                    gateway_id LIKE %s OR
+                    channel_id LIKE %s OR
+                    CAST(from_node_id AS TEXT) LIKE %s OR
+                    CAST(to_node_id AS TEXT) LIKE %s
                 )"""
                 where_conditions.append(search_condition)
                 search_param = f"%{search}%"
@@ -113,10 +118,10 @@ class PacketRepositoryOptimized:
                     where_clause = "WHERE mesh_packet_id IS NOT NULL"
 
                 # Add time window to limit data scan (improves performance dramatically)
-                # If no explicit time filter, default to last 7 days for reasonable performance
+                # If no explicit time filter, default to last 24 hours for reasonable performance
                 if not filters.get("start_time") and not filters.get("end_time"):
-                    recent_cutoff = time.time() - (7 * 24 * 3600)  # 7 days ago
-                    where_clause += " AND timestamp >= ?"
+                    recent_cutoff = time.time() - (24 * 3600)  # 24 hours ago
+                    where_clause += " AND timestamp >= %s"
                     params.append(recent_cutoff)
 
                 # Get individual packets ordered by timestamp (uses timestamp index efficiently)
@@ -133,12 +138,12 @@ class PacketRepositoryOptimized:
                         id, timestamp, from_node_id, to_node_id, portnum, portnum_name,
                         gateway_id, mesh_packet_id, rssi, snr, hop_limit, hop_start,
                         payload_length, processed_successfully,
-                        datetime(timestamp, 'unixepoch') as timestamp_str,
+                        to_timestamp(timestamp) as timestamp_str,
                         (hop_start - hop_limit) as hop_count
                     FROM packet_history
                     {where_clause}
                     ORDER BY timestamp DESC
-                    LIMIT ?
+                    LIMIT %s
                 """
 
                 cursor.execute(query, params + [fetch_limit])
@@ -294,7 +299,8 @@ class PacketRepositoryOptimized:
                 # Get total count first
                 count_query = f"SELECT COUNT(*) FROM packet_history {where_clause}"
                 cursor.execute(count_query, params)
-                total_count = cursor.fetchone()[0]
+                count_row = cursor.fetchone()
+                total_count = count_row["count"] if count_row else 0
 
                 # Main query
                 query = f"""
@@ -304,12 +310,12 @@ class PacketRepositoryOptimized:
                         payload_length, processed_successfully,
                         via_mqtt, want_ack, priority, delayed, channel_index, rx_time,
                         pki_encrypted, next_hop, relay_node, tx_after,
-                        datetime(timestamp, 'unixepoch') as timestamp_str,
+                        to_timestamp(timestamp) as timestamp_str,
                         (hop_start - hop_limit) as hop_count
                     FROM packet_history
                     {where_clause}
                     ORDER BY {order_by} {order_dir.upper()}
-                    LIMIT ? OFFSET ?
+                    LIMIT %s OFFSET %s
                 """
 
                 query_params = params + [limit, offset]
@@ -339,8 +345,6 @@ class PacketRepositoryOptimized:
 
                     packets.append(packet)
 
-            conn.close()
-
             return {
                 "packets": packets,
                 "total_count": total_count,
@@ -351,3 +355,17 @@ class PacketRepositoryOptimized:
         except Exception as e:
             logger.error(f"Error getting packets: {e}")
             raise
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass

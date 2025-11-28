@@ -7,6 +7,8 @@ import time
 from collections import defaultdict
 from typing import Any
 
+from psycopg2.extras import RealDictCursor
+
 from ..database.repositories import NodeRepository
 
 logger = logging.getLogger(__name__)
@@ -105,22 +107,22 @@ class AnalyticsService:
     @staticmethod
     def _get_packet_statistics(filters: dict, since_timestamp: float) -> dict[str, Any]:
         """Get basic packet statistics using optimized SQL query."""
-        from ..database.connection import get_db_connection
+        from ..database.connection import get_db_connection, put_db_connection
 
-        # Build WHERE clause
-        where_conditions: list[str] = ["timestamp >= ?"]
+        # Build WHERE clause using psycopg2-style placeholders
+        where_conditions: list[str] = ["timestamp >= %s"]
         params: list[Any] = [since_timestamp]
 
         if filters.get("gateway_id"):
-            where_conditions.append("gateway_id = ?")
+            where_conditions.append("gateway_id = %s")
             params.append(filters["gateway_id"])
 
         if filters.get("from_node"):
-            where_conditions.append("from_node_id = ?")
+            where_conditions.append("from_node_id = %s")
             params.append(filters["from_node"])
 
         if filters.get("hop_count") is not None:
-            where_conditions.append("(hop_start - hop_limit) = ?")
+            where_conditions.append("(hop_start - hop_limit) = %s")
             params.append(filters["hop_count"])
 
         where_clause = " AND ".join(where_conditions)
@@ -128,17 +130,30 @@ class AnalyticsService:
         query = f"""
             SELECT
                 COUNT(*) as total_packets,
-                SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) as successful_packets,
+                SUM(CASE WHEN processed_successfully THEN 1 ELSE 0 END) as successful_packets,
                 AVG(CASE WHEN payload_length IS NOT NULL AND payload_length > 0 THEN payload_length END) as avg_payload_size
             FROM packet_history
             WHERE {where_clause}
         """
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        row = cursor.fetchone()
-        conn.close()
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         total_packets = row["total_packets"] or 0
         successful_packets = row["successful_packets"] or 0
@@ -159,48 +174,62 @@ class AnalyticsService:
         filters: dict, since_timestamp: float
     ) -> dict[str, Any]:
         """Get node activity statistics using optimized SQL query."""
-        from ..database.connection import get_db_connection
+        from ..database.connection import get_db_connection, put_db_connection
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        conn = None
+        cursor = None
 
-        # Get total node count
-        cursor.execute("SELECT COUNT(*) as total_nodes FROM node_info")
-        total_nodes = cursor.fetchone()["total_nodes"]
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Build WHERE clause for packet filtering
-        where_conditions: list[str] = ["timestamp >= ?"]
-        params: list[Any] = [since_timestamp]
+            # Get total node count
+            cursor.execute("SELECT COUNT(*) as total_nodes FROM node_info")
+            total_nodes = cursor.fetchone()["total_nodes"]
 
-        if filters.get("gateway_id"):
-            where_conditions.append("gateway_id = ?")
-            params.append(filters["gateway_id"])
+            # Build WHERE clause for packet filtering
+            where_conditions: list[str] = ["timestamp >= %s"]
+            params: list[Any] = [since_timestamp]
 
-        where_clause = " AND ".join(where_conditions)
+            if filters.get("gateway_id"):
+                where_conditions.append("gateway_id = %s")
+                params.append(filters["gateway_id"])
 
-        # Get node activity distribution using SQL aggregation
-        cursor.execute(
-            f"""
-            WITH node_activity AS (
+            where_clause = " AND ".join(where_conditions)
+
+            # Get node activity distribution using SQL aggregation
+            cursor.execute(
+                f"""
+                WITH node_activity AS (
+                    SELECT
+                        from_node_id,
+                        COUNT(*) as packet_count
+                    FROM packet_history
+                    WHERE from_node_id IS NOT NULL AND {where_clause}
+                    GROUP BY from_node_id
+                )
                 SELECT
-                    from_node_id,
-                    COUNT(*) as packet_count
-                FROM packet_history
-                WHERE from_node_id IS NOT NULL AND {where_clause}
-                GROUP BY from_node_id
+                    COUNT(*) as active_nodes,
+                    SUM(CASE WHEN packet_count > 100 THEN 1 ELSE 0 END) as very_active,
+                    SUM(CASE WHEN packet_count > 10 AND packet_count <= 100 THEN 1 ELSE 0 END) as moderately_active,
+                    SUM(CASE WHEN packet_count >= 1 AND packet_count <= 10 THEN 1 ELSE 0 END) as lightly_active
+                FROM node_activity
+            """,
+                params,
             )
-            SELECT
-                COUNT(*) as active_nodes,
-                SUM(CASE WHEN packet_count > 100 THEN 1 ELSE 0 END) as very_active,
-                SUM(CASE WHEN packet_count > 10 AND packet_count <= 100 THEN 1 ELSE 0 END) as moderately_active,
-                SUM(CASE WHEN packet_count >= 1 AND packet_count <= 10 THEN 1 ELSE 0 END) as lightly_active
-            FROM node_activity
-        """,
-            params,
-        )
 
-        activity_row = cursor.fetchone()
-        conn.close()
+            activity_row = cursor.fetchone()
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         active_nodes = activity_row["active_nodes"] or 0
         inactive_nodes = total_nodes - active_nodes
@@ -227,51 +256,64 @@ class AnalyticsService:
         filters: dict, since_timestamp: float
     ) -> dict[str, Any]:
         """Get signal quality statistics using optimized SQL query."""
-        from ..database.connection import get_db_connection
+        from ..database.connection import get_db_connection, put_db_connection
 
         # Build WHERE clause
-        where_conditions: list[str] = ["timestamp >= ?"]
+        where_conditions: list[str] = ["timestamp >= %s"]
         params: list[Any] = [since_timestamp]
 
         if filters.get("gateway_id"):
-            where_conditions.append("gateway_id = ?")
+            where_conditions.append("gateway_id = %s")
             params.append(filters["gateway_id"])
 
         if filters.get("from_node"):
-            where_conditions.append("from_node_id = ?")
+            where_conditions.append("from_node_id = %s")
             params.append(filters["from_node"])
 
         where_clause = " AND ".join(where_conditions)
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Get signal statistics using SQL aggregation
-        cursor.execute(
-            f"""
-            SELECT
-                AVG(CASE WHEN rssi IS NOT NULL AND rssi != 0 THEN rssi END) as avg_rssi,
-                AVG(CASE WHEN snr IS NOT NULL THEN snr END) as avg_snr,
-                COUNT(CASE WHEN rssi IS NOT NULL AND rssi != 0 THEN 1 END) as rssi_count,
-                COUNT(CASE WHEN snr IS NOT NULL THEN 1 END) as snr_count,
-                -- RSSI distribution
-                SUM(CASE WHEN rssi > -70 THEN 1 ELSE 0 END) as rssi_excellent,
-                SUM(CASE WHEN rssi > -80 AND rssi <= -70 THEN 1 ELSE 0 END) as rssi_good,
-                SUM(CASE WHEN rssi > -90 AND rssi <= -80 THEN 1 ELSE 0 END) as rssi_fair,
-                SUM(CASE WHEN rssi <= -90 THEN 1 ELSE 0 END) as rssi_poor,
-                -- SNR distribution
-                SUM(CASE WHEN snr > 10 THEN 1 ELSE 0 END) as snr_excellent,
-                SUM(CASE WHEN snr > 5 AND snr <= 10 THEN 1 ELSE 0 END) as snr_good,
-                SUM(CASE WHEN snr > 0 AND snr <= 5 THEN 1 ELSE 0 END) as snr_fair,
-                SUM(CASE WHEN snr <= 0 THEN 1 ELSE 0 END) as snr_poor
-            FROM packet_history
-            WHERE {where_clause}
-        """,
-            params,
-        )
+            # Get signal statistics using SQL aggregation
+            cursor.execute(
+                f"""
+                SELECT
+                    AVG(CASE WHEN rssi IS NOT NULL AND rssi != 0 THEN rssi END) as avg_rssi,
+                    AVG(CASE WHEN snr IS NOT NULL THEN snr END) as avg_snr,
+                    COUNT(CASE WHEN rssi IS NOT NULL AND rssi != 0 THEN 1 END) as rssi_count,
+                    COUNT(CASE WHEN snr IS NOT NULL THEN 1 END) as snr_count,
+                    -- RSSI distribution
+                    SUM(CASE WHEN rssi > -70 THEN 1 ELSE 0 END) as rssi_excellent,
+                    SUM(CASE WHEN rssi > -80 AND rssi <= -70 THEN 1 ELSE 0 END) as rssi_good,
+                    SUM(CASE WHEN rssi > -90 AND rssi <= -80 THEN 1 ELSE 0 END) as rssi_fair,
+                    SUM(CASE WHEN rssi <= -90 THEN 1 ELSE 0 END) as rssi_poor,
+                    -- SNR distribution
+                    SUM(CASE WHEN snr > 10 THEN 1 ELSE 0 END) as snr_excellent,
+                    SUM(CASE WHEN snr > 5 AND snr <= 10 THEN 1 ELSE 0 END) as snr_good,
+                    SUM(CASE WHEN snr > 0 AND snr <= 5 THEN 1 ELSE 0 END) as snr_fair,
+                    SUM(CASE WHEN snr <= 0 THEN 1 ELSE 0 END) as snr_poor
+                FROM packet_history
+                WHERE {where_clause}
+            """,
+                params,
+            )
 
-        row = cursor.fetchone()
-        conn.close()
+            row = cursor.fetchone()
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         if not row or (row["rssi_count"] == 0 and row["snr_count"] == 0):
             return {
@@ -308,41 +350,55 @@ class AnalyticsService:
     def _get_temporal_patterns(filters: dict, since_timestamp: float) -> dict[str, Any]:
         """Get temporal patterns (hourly breakdown) efficiently using SQL aggregation."""
 
-        from ..database.connection import get_db_connection
+        from ..database.connection import get_db_connection, put_db_connection
 
         # Build WHERE clause similarly to PacketRepository but simplified (only params we care about)
-        where_conditions: list[str] = ["timestamp >= ?"]
+        where_conditions: list[str] = ["timestamp >= %s"]
         params: list[Any] = [since_timestamp]
 
         if filters.get("gateway_id"):
-            where_conditions.append("gateway_id = ?")
+            where_conditions.append("gateway_id = %s")
             params.append(filters["gateway_id"])
 
         if filters.get("from_node"):
-            where_conditions.append("from_node_id = ?")
+            where_conditions.append("from_node_id = %s")
             params.append(filters["from_node"])
 
         if filters.get("hop_count") is not None:
-            where_conditions.append("(hop_start - hop_limit) = ?")
+            where_conditions.append("(hop_start - hop_limit) = %s")
             params.append(filters["hop_count"])
 
         where_clause = " AND ".join(where_conditions)
 
         query = f"""
             SELECT
-                strftime('%H', datetime(timestamp, 'unixepoch')) AS hour,
+                to_char(to_timestamp(timestamp), 'HH24') AS hour,
                 COUNT(*) AS total_packets,
-                SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) AS successful_packets
+                SUM(CASE WHEN processed_successfully = TRUE THEN 1 ELSE 0 END) AS successful_packets
             FROM packet_history
             WHERE {where_clause}
             GROUP BY hour
         """
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(query, params)
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute(query, params)
 
-        rows = cursor.fetchall()
+            rows = cursor.fetchall()
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         hourly_counts: dict[int, int] = defaultdict(int)
         hourly_success: dict[int, int] = defaultdict(int)
@@ -390,82 +446,139 @@ class AnalyticsService:
         filters: dict, since_timestamp: float
     ) -> list[dict[str, Any]]:
         """Get top active nodes by packet count."""
-        # Get node data sorted by activity
-        node_data = NodeRepository.get_nodes(
-            limit=20, order_by="packet_count_24h", order_dir="desc"
-        )
+        from ..database.connection import get_db_connection, put_db_connection
 
-        # Format for display
-        top_nodes = []
-        for node in node_data["nodes"]:
-            if node.get("packet_count_24h", 0) > 0:
-                top_nodes.append(
-                    {
-                        "node_id": node["node_id"],
-                        "display_name": node.get("long_name")
-                        or node.get("short_name")
-                        or f"!{node['node_id']:08x}",
-                        "packet_count": node.get("packet_count_24h", 0),
-                        "avg_rssi": node.get("avg_rssi"),
-                        "avg_snr": node.get("avg_snr"),
-                        "last_seen": node.get("last_packet_time"),
-                        "hw_model": node.get("hw_model"),
-                    }
-                )
+        conn = None
+        cursor = None
+        try:
+            where_conditions: list[str] = ["ph.timestamp >= %s", "ph.from_node_id IS NOT NULL"]
+            params: list[Any] = [since_timestamp]
 
-        return top_nodes[:10]  # Return top 10
+            if filters.get("gateway_id"):
+                where_conditions.append("ph.gateway_id = %s")
+                params.append(filters["gateway_id"])
+
+            where_clause = " AND ".join(where_conditions)
+
+            query = f"""
+                SELECT
+                    ph.from_node_id AS node_id,
+                    MAX(ni.long_name) AS long_name,
+                    MAX(ni.short_name) AS short_name,
+                    MAX(ni.hw_model) AS hw_model,
+                    COUNT(*) AS packet_count,
+                    AVG(CAST(ph.rssi AS FLOAT)) AS avg_rssi,
+                    AVG(CAST(ph.snr AS FLOAT)) AS avg_snr,
+                    MAX(ph.timestamp) AS last_seen
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE {where_clause}
+                GROUP BY ph.from_node_id
+                HAVING COUNT(*) > 0
+                ORDER BY packet_count DESC
+                LIMIT 10
+            """
+
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute(query, params)
+            rows = cursor.fetchall() or []
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        top_nodes: list[dict[str, Any]] = []
+        for row in rows:
+            node_id = row.get("node_id")
+            display_name = row.get("long_name") or row.get("short_name")
+            if not display_name and node_id is not None:
+                display_name = f"!{node_id:08x}"
+            top_nodes.append(
+                {
+                    "node_id": node_id,
+                    "display_name": display_name,
+                    "packet_count": row.get("packet_count", 0) or 0,
+                    "avg_rssi": row.get("avg_rssi"),
+                    "avg_snr": row.get("avg_snr"),
+                    "last_seen": row.get("last_seen"),
+                    "hw_model": row.get("hw_model"),
+                }
+            )
+
+        return top_nodes
 
     @staticmethod
     def _get_packet_type_distribution(
         filters: dict, since_timestamp: float
     ) -> list[dict[str, Any]]:
         """Get distribution of packet types using optimized SQL query."""
-        from ..database.connection import get_db_connection
+        from ..database.connection import get_db_connection, put_db_connection
 
         # Build WHERE clause
-        where_conditions: list[str] = ["timestamp >= ?", "portnum_name IS NOT NULL"]
+        where_conditions: list[str] = ["timestamp >= %s", "portnum_name IS NOT NULL"]
         params: list[Any] = [since_timestamp]
 
         if filters.get("gateway_id"):
-            where_conditions.append("gateway_id = ?")
+            where_conditions.append("gateway_id = %s")
             params.append(filters["gateway_id"])
 
         if filters.get("from_node"):
-            where_conditions.append("from_node_id = ?")
+            where_conditions.append("from_node_id = %s")
             params.append(filters["from_node"])
 
         where_clause = " AND ".join(where_conditions)
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Get packet type distribution with percentages
-        cursor.execute(
-            f"""
-            WITH type_counts AS (
+            # Get packet type distribution with percentages
+            cursor.execute(
+                f"""
+                WITH type_counts AS (
+                    SELECT
+                        portnum_name,
+                        COUNT(*) as count
+                    FROM packet_history
+                    WHERE {where_clause}
+                    GROUP BY portnum_name
+                ),
+                total_count AS (
+                    SELECT SUM(count) as total FROM type_counts
+                )
                 SELECT
-                    portnum_name,
-                    COUNT(*) as count
-                FROM packet_history
-                WHERE {where_clause}
-                GROUP BY portnum_name
-            ),
-            total_count AS (
-                SELECT SUM(count) as total FROM type_counts
+                    tc.portnum_name,
+                    tc.count,
+                    ROUND(tc.count * 100.0 / t.total, 2) as percentage
+                FROM type_counts tc, total_count t
+                ORDER BY tc.count DESC
+                LIMIT 15
+            """,
+                params,
             )
-            SELECT
-                tc.portnum_name,
-                tc.count,
-                ROUND(tc.count * 100.0 / t.total, 2) as percentage
-            FROM type_counts tc, total_count t
-            ORDER BY tc.count DESC
-            LIMIT 15
-        """,
-            params,
-        )
 
-        packet_types = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+            packet_types = [dict(row) for row in cursor.fetchall()]
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         return packet_types
 
@@ -474,50 +587,63 @@ class AnalyticsService:
         filters: dict, since_timestamp: float
     ) -> list[dict[str, Any]]:
         """Get distribution of packets by gateway using optimized SQL query."""
-        from ..database.connection import get_db_connection
+        from ..database.connection import get_db_connection, put_db_connection
 
         # Build WHERE clause (excluding gateway_id filter since we're analyzing gateways)
-        where_conditions: list[str] = ["timestamp >= ?"]
+        where_conditions: list[str] = ["timestamp >= %s"]
         params: list[Any] = [since_timestamp]
 
         if filters.get("from_node"):
-            where_conditions.append("from_node_id = ?")
+            where_conditions.append("from_node_id = %s")
             params.append(filters["from_node"])
 
         where_clause = " AND ".join(where_conditions)
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Get gateway distribution with success rates and percentages
-        cursor.execute(
-            f"""
-            WITH gateway_stats AS (
+            # Get gateway distribution with success rates and percentages
+            cursor.execute(
+                f"""
+                WITH gateway_stats AS (
+                    SELECT
+                        COALESCE(gateway_id, 'Unknown') as gateway_id,
+                        COUNT(*) as total_packets,
+                        SUM(CASE WHEN processed_successfully THEN 1 ELSE 0 END) as successful_packets
+                    FROM packet_history
+                    WHERE {where_clause}
+                    GROUP BY gateway_id
+                ),
+                total_count AS (
+                    SELECT SUM(total_packets) as total FROM gateway_stats
+                )
                 SELECT
-                    COALESCE(gateway_id, 'Unknown') as gateway_id,
-                    COUNT(*) as total_packets,
-                    SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) as successful_packets
-                FROM packet_history
-                WHERE {where_clause}
-                GROUP BY gateway_id
-            ),
-            total_count AS (
-                SELECT SUM(total_packets) as total FROM gateway_stats
+                    gs.gateway_id,
+                    gs.total_packets,
+                    gs.successful_packets,
+                    ROUND(gs.successful_packets * 100.0 / gs.total_packets, 2) as success_rate,
+                    ROUND(gs.total_packets * 100.0 / t.total, 2) as percentage_of_total
+                FROM gateway_stats gs, total_count t
+                ORDER BY gs.total_packets DESC
+                LIMIT 20
+            """,
+                params,
             )
-            SELECT
-                gs.gateway_id,
-                gs.total_packets,
-                gs.successful_packets,
-                ROUND(gs.successful_packets * 100.0 / gs.total_packets, 2) as success_rate,
-                ROUND(gs.total_packets * 100.0 / t.total, 2) as percentage_of_total
-            FROM gateway_stats gs, total_count t
-            ORDER BY gs.total_packets DESC
-            LIMIT 20
-        """,
-            params,
-        )
 
-        gateway_stats = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+            gateway_stats = [dict(row) for row in cursor.fetchall()]
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         return gateway_stats

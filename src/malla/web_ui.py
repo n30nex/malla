@@ -34,7 +34,7 @@ from .utils.node_utils import (
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("app.log"), logging.StreamHandler(sys.stdout)],
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,8 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
         from .config import _override_config  # local import to avoid circular
 
         _override_config(cfg)
+    from .config import validate_config
+    validate_config(cfg)
 
     # Persist config on Flask instance for later use
     app.config["APP_CONFIG"] = cfg

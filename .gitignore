@@ -207,3 +207,9 @@ Thumbs.db
 # Local configuration (do not commit real config)
 config.yaml
 config_*.yaml
+
+# Editor and tool state
+.vscode/
+.cursor/
+.ruff_cache/
+.uv/

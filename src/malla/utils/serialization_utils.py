@@ -16,11 +16,11 @@ def convert_bytes_to_base64(obj: Any) -> Any:
     Returns:
         The object with all bytes converted to base64 strings
     """
-    if isinstance(obj, bytes):
-        return base64.b64encode(obj).decode("utf-8")
+    if isinstance(obj, (bytes, bytearray, memoryview)):
+        return base64.b64encode(bytes(obj)).decode("utf-8")
     elif isinstance(obj, dict):
         return {k: convert_bytes_to_base64(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
+    elif isinstance(obj, list | tuple | set):
         return [convert_bytes_to_base64(item) for item in obj]
     else:
         return obj

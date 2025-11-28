@@ -108,6 +108,7 @@ def gateway_compare():
             available_gateways=[],
             available_nodes=[],
             error=f"Error loading page: {str(e)}",
+            filters=request.args,
         )
 
 

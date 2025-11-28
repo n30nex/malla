@@ -10,7 +10,9 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
-from ..database.connection import get_db_connection
+from psycopg2.extras import RealDictCursor
+
+from ..database.connection import get_db_connection, put_db_connection
 from ..database.repositories import PacketRepository
 from ..utils.node_utils import get_bulk_node_names
 
@@ -51,13 +53,15 @@ class GatewayService:
         logger.info(f"Computing gateway statistics for {hours}h (cache miss)")
         start_time = time.time()
 
+        conn = None
+        cursor = None
         try:
             # Calculate time window
             end_time = datetime.now()
             start_time_dt = end_time - timedelta(hours=hours)
 
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Get total unique gateways
             cursor.execute(
@@ -65,7 +69,7 @@ class GatewayService:
                 SELECT COUNT(DISTINCT gateway_id) as total_gateways
                 FROM packet_history
                 WHERE gateway_id IS NOT NULL
-                AND timestamp >= ? AND timestamp <= ?
+                AND timestamp >= %s AND timestamp <= %s
             """,
                 (start_time_dt.timestamp(), end_time.timestamp()),
             )
@@ -84,7 +88,7 @@ class GatewayService:
                     MAX(timestamp) as last_seen
                 FROM packet_history
                 WHERE gateway_id IS NOT NULL
-                AND timestamp >= ? AND timestamp <= ?
+                AND timestamp >= %s AND timestamp <= %s
                 GROUP BY gateway_id
                 ORDER BY packet_count DESC
                 LIMIT 20
@@ -116,7 +120,7 @@ class GatewayService:
                 SELECT COUNT(DISTINCT from_node_id) as nodes_with_gateways
                 FROM packet_history
                 WHERE gateway_id IS NOT NULL
-                AND timestamp >= ? AND timestamp <= ?
+                AND timestamp >= %s AND timestamp <= %s
             """,
                 (start_time_dt.timestamp(), end_time.timestamp()),
             )
@@ -131,8 +135,6 @@ class GatewayService:
                 diversity_score = 100
             else:
                 diversity_score = min(100, total_gateways * 10)
-
-            conn.close()
 
             result = {
                 "total_gateways": total_gateways,
@@ -153,7 +155,6 @@ class GatewayService:
             )
 
             return result
-
         except Exception as e:
             logger.error(f"Error computing gateway statistics: {e}")
             # Return empty result on error
@@ -167,6 +168,20 @@ class GatewayService:
                 "generated_at_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "error": str(e),
             }
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
     @staticmethod
     def get_node_gateway_counts(node_ids: list[int], hours: int = 24) -> dict[int, int]:
@@ -191,15 +206,17 @@ class GatewayService:
             if now - cached_time < GatewayService._cache_ttl_seconds:
                 return cached_data
 
+        conn = None
+        cursor = None
         try:
             end_time = datetime.now()
             start_time_dt = end_time - timedelta(hours=hours)
 
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Build query with proper parameterization
-            placeholders = ",".join("?" * len(node_ids))
+            placeholders = ",".join(["%s"] * len(node_ids))
             params = list(node_ids) + [start_time_dt.timestamp(), end_time.timestamp()]
 
             cursor.execute(
@@ -208,7 +225,7 @@ class GatewayService:
                 FROM packet_history
                 WHERE from_node_id IN ({placeholders})
                 AND gateway_id IS NOT NULL
-                AND timestamp >= ? AND timestamp <= ?
+                AND timestamp >= %s AND timestamp <= %s
                 GROUP BY from_node_id
             """,
                 params,
@@ -223,8 +240,6 @@ class GatewayService:
                 if node_id not in result:
                     result[node_id] = 0
 
-            conn.close()
-
             # Cache small results
             if len(node_ids) <= 10:
                 GatewayService._cache[cache_key] = (now, result)
@@ -234,6 +249,20 @@ class GatewayService:
         except Exception as e:
             logger.error(f"Error getting node gateway counts: {e}")
             return dict.fromkeys(node_ids, 0)
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
     @staticmethod
     def clear_cache():

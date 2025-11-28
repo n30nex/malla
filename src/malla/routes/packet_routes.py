@@ -8,7 +8,9 @@ from typing import Any
 
 from flask import Blueprint, render_template, request
 
-from ..database.connection import get_db_connection
+from psycopg2.extras import RealDictCursor
+
+from ..database.connection import get_db_connection, put_db_connection
 
 # Import from the new modular architecture
 from ..database.repositories import LocationRepository, NodeRepository
@@ -25,9 +27,11 @@ def get_packet_details(packet_id: int) -> dict[str, Any] | None:
     """Get comprehensive details for a specific packet including all receptions."""
     logger.info(f"Getting packet details for packet {packet_id}")
 
+    conn = None
+    cursor = None
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         # Get the main packet information
         cursor.execute(
@@ -39,7 +43,7 @@ def get_packet_details(packet_id: int) -> dict[str, Any] | None:
                 via_mqtt, want_ack, priority, delayed, channel_index, rx_time,
                 pki_encrypted, next_hop, relay_node, tx_after
             FROM packet_history
-            WHERE id = ?
+            WHERE id = %s
         """,
             (packet_id,),
         )
@@ -47,7 +51,6 @@ def get_packet_details(packet_id: int) -> dict[str, Any] | None:
         packet_row = cursor.fetchone()
         if not packet_row:
             logger.warning(f"Packet {packet_id} not found")
-            conn.close()
             return None
 
         packet = dict(packet_row)
@@ -121,8 +124,8 @@ def get_packet_details(packet_id: int) -> dict[str, Any] | None:
                     payload_length, processed_successfully,
                     raw_payload, from_node_id, to_node_id, portnum, portnum_name, relay_node
                 FROM packet_history
-                WHERE mesh_packet_id = ?
-                AND id != ?
+                WHERE mesh_packet_id = %s
+                AND id != %s
                 ORDER BY timestamp ASC
             """,
                 (packet["mesh_packet_id"], packet_id),
@@ -141,10 +144,10 @@ def get_packet_details(packet_id: int) -> dict[str, Any] | None:
                     payload_length, processed_successfully,
                     raw_payload, from_node_id, to_node_id, portnum, portnum_name, relay_node
                 FROM packet_history
-                WHERE from_node_id = ?
-                AND timestamp BETWEEN ? AND ?
-                AND portnum = ?
-                AND id != ?
+                WHERE from_node_id = %s
+                AND timestamp BETWEEN %s AND %s
+                AND portnum = %s
+                AND id != %s
                 ORDER BY timestamp ASC
             """,
                 (
@@ -231,9 +234,9 @@ def get_packet_details(packet_id: int) -> dict[str, Any] | None:
                 id, timestamp, portnum_name, to_node_id, gateway_id, rssi, snr,
                 hop_limit, hop_start, payload_length, processed_successfully, mesh_packet_id
             FROM packet_history
-            WHERE from_node_id = ?
-            AND timestamp BETWEEN ? AND ?
-            AND id != ?
+            WHERE from_node_id = %s
+            AND timestamp BETWEEN %s AND %s
+            AND id != %s
             ORDER BY timestamp DESC
             LIMIT 20
         """,
@@ -382,8 +385,6 @@ def get_packet_details(packet_id: int) -> dict[str, Any] | None:
         # Always generate raw analysis to show packet structure, even without payload
         raw_analysis = get_raw_packet_analysis(packet)
 
-        conn.close()
-
         # Convert any remaining bytes objects to base64 for JSON serialization
         from ..utils.serialization_utils import convert_bytes_to_base64
 
@@ -413,10 +414,23 @@ def get_packet_details(packet_id: int) -> dict[str, Any] | None:
             f"Packet details retrieved: {len(receptions)} other receptions, {len(context_packets)} context packets, {len(gateway_locations)} gateway locations, correlation: {correlation_info}"
         )
         return result
-
     except Exception as e:
         logger.error(f"Error getting packet details for packet {packet_id}: {e}")
         raise
+    finally:
+        if cursor:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn:
+            try:
+                put_db_connection(conn)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 
 def decode_packet_payload(packet: dict[str, Any]) -> dict[str, Any] | None:
@@ -458,8 +472,9 @@ def decode_packet_payload(packet: dict[str, Any]) -> dict[str, Any] | None:
             payload_info["decoded"] = True
 
             # Create application-specific data structure based on portnum
-            if packet["portnum_name"] == "POSITION_APP":
+            if packet["portnum_name"] == "POSITION_APP" or packet["portnum_name"] == "MAP_REPORT_APP":
                 # Convert raw protobuf fields to user-friendly format
+                # Both POSITION_APP and MAP_REPORT_APP contain Position messages
                 raw_data = decoded_payload
                 payload_info["data"] = {
                     "latitude": raw_data.get("latitude_i", 0) / 1e7
@@ -1187,8 +1202,8 @@ def get_raw_packet_analysis(packet: dict[str, Any]) -> dict[str, Any] | None:
                 mqtt_privacy["privacy_features"].append("Gateway node ID tracked")
             mqtt_privacy["exposure_risks"].append("Packet visible to MQTT subscribers")
 
-        # Position privacy analysis for POSITION_APP
-        if packet.get("portnum_name") == "POSITION_APP":
+        # Position privacy analysis for POSITION_APP and MAP_REPORT_APP
+        if packet.get("portnum_name") == "POSITION_APP" or packet.get("portnum_name") == "MAP_REPORT_APP":
             try:
                 position = mesh_pb2.Position()
                 position.ParseFromString(packet["raw_payload"])

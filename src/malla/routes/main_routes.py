@@ -55,6 +55,26 @@ def map_view():
         return f"Map error: {e}", 500
 
 
+@main_bp.route("/chat")
+def chat_view():
+    """Live chat view showing text messages."""
+    try:
+        return render_template("chat.html")
+    except Exception as e:
+        logger.error(f"Error in chat route: {e}")
+        return f"Chat error: {e}", 500
+
+
+@main_bp.route("/live-map")
+def live_map_view():
+    """Real-time packet flow map view."""
+    try:
+        return render_template("live_map.html")
+    except Exception as e:
+        logger.error(f"Error in live map route: {e}")
+        return f"Live map error: {e}", 500
+
+
 @main_bp.route("/longest-links")
 def longest_links():
     """Longest links analysis page."""

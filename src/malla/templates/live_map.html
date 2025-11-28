@@ -1,0 +1,378 @@
+{% extends "base.html" %}
+
+{% block title %}Live Map - {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<!-- Full-bleed layout: close base container and use viewport-sized map -->
+</div>
+
+<div class="live-map-page">
+    <div class="live-map-header">
+        <div>
+            <h2 class="mb-0">Live Traffic Map</h2>
+            <small class="text-muted">Packets animate between nodes as they arrive.</small>
+        </div>
+        <div class="d-flex gap-3 align-items-center live-map-stats" id="live-stats-strip">
+            <span class="badge bg-success live-pill" id="live-status" aria-live="polite">Live</span>
+            <span class="text-muted small">Events: <span id="live-counter">0</span></span>
+            <span class="text-muted small">Nodes: <span id="live-nodes-count">--</span></span>
+            <span class="text-muted small">Gateways: <span id="live-gw-count">--</span></span>
+            <span class="text-muted small d-none" id="live-reconnect-hint">Reconnecting…</span>
+        </div>
+    </div>
+
+    <div class="live-map-wrapper">
+        <div id="live-map"></div>
+
+        <div class="live-map-legend shadow-sm" id="live-map-legend">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <strong class="small mb-0">Legend</strong>
+                <button class="btn btn-sm btn-link p-0" id="toggle-legend">
+                    <i class="bi bi-chevron-up"></i>
+                </button>
+            </div>
+            <div id="legend-body">
+                <div class="small mb-1"><span class="legend-dot bg-primary"></span> Position / Node</div>
+                <div class="small mb-1"><span class="legend-dot" style="background:#20c997"></span> Text</div>
+                <div class="small mb-1"><span class="legend-dot" style="background:#fd7e14"></span> Telemetry</div>
+                <div class="small mb-1"><span class="legend-line" style="border-color:#ffc107"></span> Traceroute hops</div>
+                <div class="small mb-1"><span class="legend-line" style="border-color:#6c757d; border-style:dashed"></span> Direct/Multi-hop</div>
+                <div class="small mb-1"><span class="legend-halo"></span> Gateway heard-by halo</div>
+                <div class="small mb-1"><span class="legend-dot role-gw"></span> Gateway</div>
+                <div class="small mb-1"><span class="legend-dot role-router"></span> Router/Repeater</div>
+                <div class="small mb-1"><span class="legend-dot role-client"></span> Client</div>
+                <div class="small mb-1"><span class="legend-dot role-sensor"></span> Sensor</div>
+            </div>
+        </div>
+        <div class="live-map-onboarding shadow-sm" id="live-map-help" data-onboarding>
+            <strong>How to read</strong>
+            <p class="mb-1 small">Lines show recent packets (fade after ~30s). Colors follow packet type. Gateways glow based on recent receptions. Use filters on the right to drill in.</p>
+            <button class="btn btn-sm btn-outline-secondary w-100" id="dismiss-help">Got it</button>
+        </div>
+        <div class="legend-compact" id="legend-compact">
+            <i class="bi bi-map"></i> Legend
+        </div>
+
+        <div class="live-map-panel shadow-lg" id="live-map-panel">
+            <div class="d-flex align-items-start justify-content-between mb-2">
+                <div>
+                    <h5 class="mb-1">Recent Activity</h5>
+                    <div class="text-muted small">Filters and live feed</div>
+                </div>
+                <button class="btn btn-sm btn-outline-secondary" id="pause-btn">Pause</button>
+            </div>
+
+            <div class="d-flex flex-wrap gap-2 mb-2">
+                <select class="form-select form-select-sm" id="port-filter">
+                    <option value="">All Types</option>
+                    <option value="POSITION_APP">Position</option>
+                    <option value="TEXT_MESSAGE_APP">Text</option>
+                    <option value="TELEMETRY_APP">Telemetry</option>
+                    <option value="TRACEROUTE_APP">Traceroute</option>
+                </select>
+                <div class="d-flex gap-2 flex-fill">
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="toggle-heat">
+                        <label class="form-check-label small" for="toggle-heat">Heatmap</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="toggle-cluster" checked>
+                        <label class="form-check-label small" for="toggle-cluster">Clusters</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-2">
+                <label class="form-label small mb-1">Display window</label>
+                <select class="form-select form-select-sm" id="time-window">
+                    <option value="300000">Last 5 minutes</option>
+                    <option value="900000" selected>Last 15 minutes</option>
+                    <option value="3600000">Last 1 hour</option>
+                </select>
+            </div>
+
+            <div class="mb-2">
+                <label class="form-label small mb-1">Gateway overlay</label>
+                <div class="d-flex gap-2">
+                    <select class="form-select form-select-sm" id="gateway-filter">
+                        <option value="">All gateways</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline-secondary" id="gateway-solo">Solo</button>
+                    <button class="btn btn-sm btn-outline-secondary" id="gateway-clear">Clear</button>
+                </div>
+            </div>
+
+            <div id="activity-list" class="small live-map-activity"></div>
+            <a href="#" class="small d-block mt-2" id="reset-onboarding">Reset tips</a>
+        </div>
+        <button class="btn btn-sm btn-dark live-map-panel-toggle" id="live-map-panel-toggle" aria-label="Toggle filters" aria-expanded="true" title="Filters & live feed">
+            <i class="bi bi-sliders"></i>
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+<style>
+  .live-map-page {
+    width: 100vw;
+    margin-left: calc(-50vw + 50%);
+    margin-right: calc(-50vw + 50%);
+    padding: 0 12px 12px;
+  }
+  .live-map-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0;
+  }
+  .live-map-wrapper {
+    position: relative;
+    height: calc(100vh - 140px);
+    min-height: 70vh;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #0d1117;
+  }
+  #live-map {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+  }
+  .live-map-legend {
+    position: absolute;
+    top: 70px;
+    left: 10px;
+    background: rgba(24, 26, 27, 0.9);
+    color: #fff;
+    padding: 10px;
+    border-radius: 8px;
+    z-index: 1400;
+    min-width: 160px;
+  }
+  .legend-compact {
+    display: none;
+  }
+  .live-map-onboarding {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    background: rgba(24, 26, 27, 0.92);
+    color: #fff;
+    padding: 10px;
+    border-radius: 8px;
+    z-index: 1400;
+    max-width: 260px;
+  }
+  .legend-dot {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 6px;
+  }
+  .legend-line {
+    display: inline-block;
+    width: 24px;
+    height: 0;
+    border-top: 3px solid #fff;
+    margin-right: 6px;
+  }
+  .legend-halo {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(13,202,240,0.6) 0%, rgba(13,202,240,0) 70%);
+    margin-right: 6px;
+  }
+  .live-map-panel {
+    position: absolute;
+    top: 72px;
+    right: 18px;
+    width: min(400px, 28vw);
+    max-height: calc(100% - 24px);
+    background: rgba(17, 17, 20, 0.95);
+    color: #fff;
+    border-radius: 12px;
+    padding: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    backdrop-filter: blur(6px);
+    z-index: 1500;
+    transition: transform 0.25s ease, opacity 0.25s ease, box-shadow 0.2s ease;
+    border: 1px solid rgba(13, 110, 253, 0.25);
+  }
+  .live-map-panel.collapsed {
+    transform: translateX(110%);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .footer {
+    display: none !important;
+  }
+  .live-map-activity {
+    flex: 1;
+    overflow-y: auto;
+    max-height: 60vh;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 6px;
+    background: rgba(0, 0, 0, 0.25);
+  }
+  @media (max-width: 992px) {
+    .live-map-wrapper {
+      height: calc(100vh - 120px);
+    }
+    .live-map-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+    }
+    .live-map-panel {
+      width: 92%;
+      left: 4%;
+      right: 4%;
+      max-height: 50vh;
+      top: auto;
+      bottom: 12px;
+      transform: translateY(0);
+    }
+    .live-map-panel.collapsed {
+      transform: translateY(110%);
+    }
+  }
+  .live-map-panel-toggle {
+    position: fixed;
+    top: 82px;
+    right: 18px;
+    z-index: 3100;
+    border-radius: 50%;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0d6efd;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+  }
+  .live-map-panel-toggle.pulse {
+    animation: pulse-toggle 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse-toggle {
+    0% { box-shadow: 0 0 0 0 rgba(13, 110, 253, 0.6); }
+    70% { box-shadow: 0 0 0 14px rgba(13, 110, 253, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(13, 110, 253, 0); }
+  }
+  .live-pill {
+    position: relative;
+  }
+  .live-pill.pulse::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border-radius: 999px;
+    border: 1px solid rgba(25, 135, 84, 0.6);
+    animation: pulse-pill 1.4s ease-in-out infinite;
+  }
+  .live-pill.paused {
+    background: #6c757d !important;
+  }
+  @keyframes pulse-pill {
+    0% { transform: scale(0.95); opacity: 0.6; }
+    70% { transform: scale(1.1); opacity: 0; }
+    100% { transform: scale(0.95); opacity: 0; }
+  }
+  .legend-compact {
+    display: none;
+  }
+  @media (max-width: 768px) {
+    .live-map-legend {
+      display: none;
+    }
+    .legend-compact {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 920;
+      background: rgba(24, 26, 27, 0.9);
+      color: #fff;
+      border-radius: 999px;
+      padding: 6px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+  }
+  /* Live map visuals */
+  .node-name-label div {
+    color: #fff;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    transform: translate(-12px, -10px);
+  }
+  .hop-label div {
+    background: rgba(13, 110, 253, 0.9);
+    color: #fff;
+    border-radius: 4px;
+    padding: 2px 5px;
+    font-size: 10px;
+    font-weight: 700;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+  }
+  .legend-dot.role-gw { background:#0dcaf0; }
+  .legend-dot.role-router { background:#d63384; }
+  .legend-dot.role-client { background:#66b0ff; }
+  .legend-dot.role-sensor { background:#20c997; }
+  .legend-dot.role-unknown { background:#adb5bd; }
+  .live-map-marker.role-gateway { fill: #0dcaf0; stroke: #0a95b8; }
+  .live-map-marker.role-router { fill: #d63384; stroke: #9c1f60; }
+  .live-map-marker.role-client { fill: #66b0ff; stroke: #1c78c0; }
+  .live-map-marker.role-sensor { fill: #20c997; stroke: #0f7e63; }
+  .live-map-marker.role-unknown { fill: #adb5bd; stroke: #6c757d; }
+  .live-map-marker.age-fresh { opacity: 1; }
+  .live-map-marker.age-warm { opacity: 0.65; }
+  .live-map-marker.age-stale { opacity: 0.4; }
+  .live-map-marker.age-ghost { opacity: 0.2; }
+  .live-map-broadcast {
+    animation: pulse-broadcast 1s ease-out;
+  }
+  @keyframes pulse-broadcast {
+    0% { box-shadow: 0 0 0 0 rgba(32, 201, 151, 0.45); }
+    70% { box-shadow: 0 0 0 16px rgba(32, 201, 151, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(32, 201, 151, 0); }
+  }
+  .live-arc {
+    animation: dashflow 2s linear infinite;
+    stroke-linecap: round;
+  }
+  @keyframes dashflow {
+    to { stroke-dashoffset: -60; }
+  }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/uuid/9.0.1/uuidv4.min.js"></script>
+<script src="{{ url_for('static', filename='js/live-map.js') }}"></script>
+{% endblock %}
+
+{% block footer %}{% endblock %}

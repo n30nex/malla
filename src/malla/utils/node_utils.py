@@ -7,7 +7,9 @@ import logging
 import threading
 from typing import Any
 
-from ..database.connection import get_db_connection
+from psycopg2.extras import RealDictCursor
+
+from ..database.connection import get_db_connection, put_db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -116,19 +118,22 @@ def get_node_display_name(node_id: int | str) -> str:
             return node_name_cache[node_id]
 
     # Query database for node info
+    conn = None
+    cursor = None
+    conn = None
+    cursor = None
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute(
             """
             SELECT long_name, short_name, hex_id
             FROM node_info
-            WHERE node_id = ?
+            WHERE node_id = %s
         """,
             (node_id,),
         )
         result = cursor.fetchone()
-        conn.close()
 
         if result:
             long_name = result["long_name"]
@@ -159,6 +164,20 @@ def get_node_display_name(node_id: int | str) -> str:
             return f"!{node_id:08x}"
         else:
             return "Unknown"
+    finally:
+        if cursor:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn:
+            try:
+                put_db_connection(conn)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 
 def _format_node_display_name(
@@ -216,12 +235,14 @@ def get_bulk_node_short_names(node_ids: list[int]) -> dict[int, str]:
 
     logger.debug(f"Getting bulk node short names for {len(node_ids)} nodes")
 
+    conn = None
+    cursor = None
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         # Use placeholders for the IN clause
-        placeholders = ",".join("?" * len(node_ids))
+        placeholders = ",".join(["%s"] * len(node_ids))
         cursor.execute(
             f"""
             SELECT node_id, short_name
@@ -232,7 +253,6 @@ def get_bulk_node_short_names(node_ids: list[int]) -> dict[int, str]:
         )
 
         db_results = cursor.fetchall()
-        conn.close()
 
         # Process database results
         result = {}
@@ -266,6 +286,20 @@ def get_bulk_node_short_names(node_ids: list[int]) -> dict[int, str]:
         for node_id in node_ids:
             result[node_id] = f"{node_id:08x}"[-4:]
         return result
+    finally:
+        if cursor:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn:
+            try:
+                put_db_connection(conn)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 
 def get_bulk_node_names(node_ids: list[int]) -> dict[int, str]:
@@ -296,12 +330,14 @@ def get_bulk_node_names(node_ids: list[int]) -> dict[int, str]:
 
     # Query database for uncached nodes
     if uncached_ids:
+        conn = None
+        cursor = None
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Use placeholders for the IN clause
-            placeholders = ",".join("?" * len(uncached_ids))
+            placeholders = ",".join(["%s"] * len(uncached_ids))
             cursor.execute(
                 f"""
                 SELECT node_id, long_name, short_name, hex_id
@@ -312,7 +348,6 @@ def get_bulk_node_names(node_ids: list[int]) -> dict[int, str]:
             )
 
             db_results = cursor.fetchall()
-            conn.close()
 
             # Process database results
             found_ids = set()
@@ -344,7 +379,24 @@ def get_bulk_node_names(node_ids: list[int]) -> dict[int, str]:
             logger.error(f"Error getting bulk node names: {e}")
             # Return fallback names for all uncached IDs
             for node_id in uncached_ids:
-                result[node_id] = f"!{node_id:08x}"
+                display_name = f"!{node_id:08x}"
+                result[node_id] = display_name
+                with cache_lock:
+                    node_name_cache[node_id] = display_name
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
     logger.debug(f"Bulk node names completed: {len(result)} names returned")
     return result

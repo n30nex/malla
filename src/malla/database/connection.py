@@ -2,66 +2,79 @@
 Database connection management for Meshtastic Mesh Health Web UI.
 """
 
+from __future__ import annotations
+
 import logging
 import os
-import sqlite3
+import threading
+from typing import Any
 
-# Prefer configuration loader over environment variables
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from psycopg2.pool import ThreadedConnectionPool
+
 from malla.config import get_config
 
 logger = logging.getLogger(__name__)
 
+# Connection pool for PostgreSQL
+_connection_pool: ThreadedConnectionPool | None = None
+_migration_lock = threading.Lock()
+_migrations_initialized = False
 
-def get_db_connection() -> sqlite3.Connection:
+
+def get_db_connection() -> Any:
     """
-    Get a connection to the SQLite database with proper concurrency configuration.
+    Get a connection to the configured PostgreSQL database.
 
-    Returns:
-        sqlite3.Connection: Database connection with row factory set and WAL mode enabled
+    SQLite backends are intentionally disallowed (the project is PostgreSQL-only).
     """
-    # Resolve DB path:
-    # 1. Explicit override via `MALLA_DATABASE_FILE` env-var (handy for scripts)
-    # 2. Value from YAML configuration
-    # 3. Fallback to hard-coded default
+    global _connection_pool
 
-    db_path: str = (
-        os.getenv("MALLA_DATABASE_FILE")
-        or get_config().database_file
-        or "meshtastic_history.db"
-    )
+    config = get_config()
+
+    if config.database_url and config.database_url.startswith("sqlite"):
+        raise RuntimeError(
+            "SQLite backend is not supported. Configure PostgreSQL via MALLA_DATABASE_URL "
+            "or MALLA_DATABASE_HOST/PORT/NAME/USER/PASSWORD."
+        )
+    if config.database_file and (config.database_file != "meshtastic_history.db"):
+        raise RuntimeError(
+            "SQLite backend is not supported. Remove database_file or set PostgreSQL settings."
+        )
+
+    # Build connection parameters for PostgreSQL
+    if config.database_url:
+        conn_params = config.database_url
+    else:
+        conn_params = {
+            "host": config.database_host or "localhost",
+            "port": config.database_port or 5432,
+            "database": config.database_name or "meshtastic_history",
+            "user": config.database_user or os.getenv("USER", "postgres"),
+            "password": config.database_password or "",
+        }
 
     try:
-        conn = sqlite3.connect(
-            db_path, timeout=30.0
-        )  # 30 second timeout for busy database
-        conn.row_factory = sqlite3.Row  # Enable column access by name
+        # Initialize connection pool if not already done
+        if _connection_pool is None:
+            minconn = int(os.getenv("MALLA_DB_POOL_MIN", "1"))
+            maxconn = int(os.getenv("MALLA_DB_POOL_MAX", "50"))
+            maxconn = max(maxconn, minconn + 1)
 
-        # Configure SQLite for better concurrency
-        cursor = conn.cursor()
+            if isinstance(conn_params, str):
+                _connection_pool = ThreadedConnectionPool(
+                    minconn=minconn, maxconn=maxconn, dsn=conn_params
+                )
+            else:
+                _connection_pool = ThreadedConnectionPool(
+                    minconn=minconn, maxconn=maxconn, **conn_params
+                )
 
-        # Enable WAL mode for better concurrent read/write performance
-        cursor.execute("PRAGMA journal_mode=WAL")
+        conn = _connection_pool.getconn()
+        conn.autocommit = False
 
-        # Set synchronous to NORMAL for better performance while maintaining safety
-        cursor.execute("PRAGMA synchronous=NORMAL")
-
-        # Set busy timeout to handle concurrent access
-        cursor.execute("PRAGMA busy_timeout=30000")  # 30 seconds
-
-        # Enable foreign key constraints
-        cursor.execute("PRAGMA foreign_keys=ON")
-
-        # Optimize for read performance
-        cursor.execute("PRAGMA cache_size=10000")  # 10MB cache
-        cursor.execute("PRAGMA temp_store=MEMORY")
-
-        # ------------------------------------------------------------------
-        # Lightweight schema migrations – run once per connection.
-        # ------------------------------------------------------------------
-        try:
-            _ensure_schema_migrations(cursor)
-        except Exception as e:
-            logger.warning(f"Schema migration check failed: {e}")
+        _run_schema_migrations_once(conn)
 
         return conn
     except Exception as e:
@@ -69,94 +82,183 @@ def get_db_connection() -> sqlite3.Connection:
         raise
 
 
+def put_db_connection(conn: Any) -> None:
+    """Return a connection to the pool."""
+    global _connection_pool
+    if conn is None:
+        return
+
+    if _connection_pool:
+        try:
+            try:
+                # Ensure no open transaction is left behind
+                conn.rollback()
+            except Exception:
+                pass
+            _connection_pool.putconn(conn)
+        except Exception as e:
+            logger.warning(f"Error returning connection to pool: {e}")
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def init_database() -> None:
-    """
-    Initialize the database connection and verify it's accessible.
-    This function is called during application startup.
-    """
-    # Resolve DB path:
-    # 1. Explicit override via `MALLA_DATABASE_FILE` env-var (handy for scripts)
-    # 2. Value from YAML configuration
-    # 3. Fallback to hard-coded default
+    """Initialize the database connection and verify it's accessible."""
+    config = get_config()
 
-    db_path: str = (
-        os.getenv("MALLA_DATABASE_FILE")
-        or get_config().database_file
-        or "meshtastic_history.db"
-    )
+    if config.database_url:
+        db_info = "connection string"
+    else:
+        db_info = f"{config.database_host or 'localhost'}:{config.database_port or 5432}/{config.database_name or 'meshtastic_history'}"
 
-    logger.info(f"Initializing database connection to: {db_path}")
+    logger.info(f"Initializing database connection to: {db_info}")
 
     try:
-        # Test the connection
         conn = get_db_connection()
-
-        # Test a simple query to verify the database is accessible
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
-        table_count = cursor.fetchone()[0]
-
-        # Check and log the journal mode
-        cursor.execute("PRAGMA journal_mode")
-        journal_mode = cursor.fetchone()[0]
-
-        conn.close()
-
-        logger.info(
-            f"Database connection successful - found {table_count} tables, journal_mode: {journal_mode}"
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            """
+            SELECT COUNT(*) as table_count
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+            """
         )
+        result = cursor.fetchone()
+        table_count = result["table_count"] if result else 0
+
+        cursor.close()
+        put_db_connection(conn)
+
+        logger.info(f"Database connection successful - found {table_count} tables")
 
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
-        # Don't raise the exception - let the app start anyway
-        # The database might not exist yet or be created by another process
+        # Do not raise so the app can still start if DB comes up later
 
 
 # ----------------------------------------------------------------------
 # Internal helpers
 # ----------------------------------------------------------------------
 
-
 _SCHEMA_MIGRATIONS_DONE: set[str] = set()
 
 
-def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
-    """Run any idempotent schema updates that the application depends on.
+def _ensure_schema_migrations(cursor: Any) -> None:
+    """Run idempotent schema updates that the application depends on."""
 
-    Currently this checks that ``node_info`` has a ``primary_channel`` column
-    (added in April 2024) so queries that reference it do not fail when the
-    database was created with an older version of the schema.
+    migrations: dict[str, Any] = {
+        "primary_channel": _migration_primary_channel,
+        "bigint_node_ids": _migration_bigint_ids,
+        "packet_indexes": _migration_packet_indexes,
+    }
 
-    The function is **safe** to run repeatedly – it will only attempt each
-    migration once per Python process and each individual migration is
-    guarded with a try/except that ignores the *duplicate column* error.
-    """
+    for name, func in migrations.items():
+        if name in _SCHEMA_MIGRATIONS_DONE:
+            continue
+        try:
+            func(cursor)
+            _SCHEMA_MIGRATIONS_DONE.add(name)
+        except Exception as exc:  # noqa: BLE001
+            error_msg = str(exc).lower()
+            if "duplicate column" in error_msg or "already exists" in error_msg:
+                _SCHEMA_MIGRATIONS_DONE.add(name)
+            elif "cannot cast" in error_msg:
+                logger.warning(
+                    "Migration %s skipped due to cast issue (likely empty/new DB): %s",
+                    name,
+                    exc,
+                )
+                _SCHEMA_MIGRATIONS_DONE.add(name)
+            else:
+                raise
 
-    global _SCHEMA_MIGRATIONS_DONE  # pylint: disable=global-statement
 
-    # Quickly short-circuit if we've already handled migrations in this process
-    if "primary_channel" in _SCHEMA_MIGRATIONS_DONE:
+def _run_schema_migrations_once(conn: Any) -> None:
+    """Run schema migrations only once per process to keep connection acquisition lightweight."""
+
+    global _migrations_initialized
+    if _migrations_initialized:
         return
 
-    try:
-        # Check whether the column already exists
-        cursor.execute("PRAGMA table_info(node_info)")
-        columns = [row[1] for row in cursor.fetchall()]
+    with _migration_lock:
+        if _migrations_initialized:
+            return
 
-        if "primary_channel" not in columns:
-            cursor.execute("ALTER TABLE node_info ADD COLUMN primary_channel TEXT")
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_node_primary_channel ON node_info(primary_channel)"
-            )
-            logging.info(
-                "Added primary_channel column to node_info table via auto-migration"
-            )
+        cursor = None
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            _ensure_schema_migrations(cursor)
+            conn.commit()
+            _migrations_initialized = True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Schema migration check failed: {exc}")
+            conn.rollback()
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
 
-        _SCHEMA_MIGRATIONS_DONE.add("primary_channel")
-    except sqlite3.OperationalError as exc:
-        # Ignore errors about duplicate columns in race situations – another
-        # process may have altered the table first.
-        if "duplicate column name" in str(exc).lower():
-            _SCHEMA_MIGRATIONS_DONE.add("primary_channel")
-        else:
+
+def _migration_primary_channel(cursor: Any) -> None:
+    """Ensure primary_channel column exists on node_info."""
+    cursor.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'node_info' AND column_name = 'primary_channel'
+        """
+    )
+    column_exists = cursor.fetchone() is not None
+
+    if not column_exists:
+        cursor.execute("ALTER TABLE node_info ADD COLUMN primary_channel TEXT")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_node_primary_channel ON node_info(primary_channel)"
+        )
+        logger.info("Added primary_channel column to node_info table via auto-migration")
+
+
+def _migration_bigint_ids(cursor: Any) -> None:
+    """Ensure node id columns are BIGINT to avoid overflow."""
+    alter_statements = [
+        "ALTER TABLE node_info ALTER COLUMN node_id TYPE BIGINT",
+        "ALTER TABLE packet_history ALTER COLUMN from_node_id TYPE BIGINT",
+        "ALTER TABLE packet_history ALTER COLUMN to_node_id TYPE BIGINT",
+        "ALTER TABLE packet_history ALTER COLUMN mesh_packet_id TYPE BIGINT",
+        "ALTER TABLE packet_history ALTER COLUMN next_hop TYPE BIGINT",
+        "ALTER TABLE packet_history ALTER COLUMN relay_node TYPE BIGINT",
+    ]
+
+    for stmt in alter_statements:
+        try:
+            cursor.execute(stmt)
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            if "does not exist" in msg or "cannot alter type" in msg:
+                continue
+            if "integer out of range" in msg:
+                continue
+            raise
+
+
+def _migration_packet_indexes(cursor: Any) -> None:
+    """Create helpful indexes used by packet filters."""
+    index_statements = [
+        "CREATE INDEX IF NOT EXISTS idx_packet_channel_id ON packet_history(channel_id)",
+        "CREATE INDEX IF NOT EXISTS idx_packet_gateway_id ON packet_history(gateway_id)",
+        "CREATE INDEX IF NOT EXISTS idx_packet_to_node ON packet_history(to_node_id)",
+        "CREATE INDEX IF NOT EXISTS idx_packet_portnum_name ON packet_history(portnum_name)",
+    ]
+
+    for stmt in index_statements:
+        try:
+            cursor.execute(stmt)
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            if "already exists" in msg or "duplicate" in msg:
+                continue
             raise

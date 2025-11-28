@@ -8,8 +8,17 @@ import tempfile
 import threading
 import time
 
+import sys
+from pathlib import Path
+
 import pytest
 from flask import jsonify
+
+# Ensure local source is importable without an installed package
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_PATH = PROJECT_ROOT / "src"
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
 
 from malla.config import AppConfig
 

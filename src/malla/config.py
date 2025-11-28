@@ -26,10 +26,19 @@ class AppConfig:
 
     # Flask/server settings
     secret_key: str = "dev-secret-key-change-in-production"
-    database_file: str = "meshtastic_history.db"
+    database_file: str = "meshtastic_history.db"  # Deprecated: kept for backward compatibility
     host: str = "0.0.0.0"
     port: int = 5008
     debug: bool = False
+
+    # PostgreSQL database settings
+    # Either use database_url (connection string) or individual parameters
+    database_url: str | None = None  # e.g., "postgresql://user:password@host:port/database"
+    database_host: str | None = None
+    database_port: int | None = None
+    database_name: str | None = None
+    database_user: str | None = None
+    database_password: str | None = None
 
     # MQTT capture settings
     mqtt_broker_address: str = "127.0.0.1"
@@ -38,6 +47,17 @@ class AppConfig:
     mqtt_password: str | None = None
     mqtt_topic_prefix: str = "msh"
     mqtt_topic_suffix: str = "/+/+/+/#"
+    mqtt_keepalive: int = 60
+    mqtt_qos: int = 0
+    mqtt_clean_session: bool = True
+    mqtt_tls_enabled: bool = False
+    mqtt_tls_ca_cert: str | None = None
+    mqtt_tls_client_cert: str | None = None
+    mqtt_tls_client_key: str | None = None
+    mqtt_tls_insecure: bool = False
+    mqtt_reconnect_max_retries: int = 10
+    mqtt_reconnect_base_delay: int = 1
+    mqtt_reconnect_max_delay: int = 60
 
     # Meshtastic channel default key (for optional packet decryption)
     # Supports comma-separated list of base64-encoded keys
@@ -49,6 +69,12 @@ class AppConfig:
     # Data cleanup settings
     # Number of hours after which to delete old data (0 = never delete)
     data_retention_hours: int = 0
+    # Cleanup interval in seconds (default: 1 hour)
+    data_cleanup_interval_seconds: int = 3600
+
+    # Metrics
+    metrics_enabled: bool = False
+    metrics_port: int = 9100
 
     # OpenTelemetry settings
     otlp_endpoint: str | None = None
@@ -82,6 +108,7 @@ class AppConfig:
 
 _YAML_DEFAULT_PATH = "config.yaml"
 _ENV_PREFIX = "MALLA_"  # Prefix for environment variable overrides
+_DEFAULT_DB_FILE = "meshtastic_history.db"
 
 
 def _resolve_type(t: Any) -> Any:  # noqa: ANN001
@@ -108,7 +135,7 @@ def _coerce_value(value: str, target_type):  # noqa: ANN001
             return float(value)
     except ValueError:
         logger.warning(
-            "Could not coerce environment variable '%s' to %s – using raw string",
+            "Could not coerce environment variable '%s' to %s - using raw string",
             value,
             target_type,
         )
@@ -122,10 +149,10 @@ def load_config(config_path: str | os.PathLike | None = None) -> AppConfig:  # n
     2. YAML file (``config.yaml`` or path provided via *config_path* or the
        ``MALLA_CONFIG_FILE`` environment variable).
     3. Environment variables prefixed with ``MALLA_`` (e.g. ``MALLA_NAME``)
-       – case-insensitive.  **This is the only supported override mechanism.**
+       - case-insensitive.  **This is the only supported override mechanism.**
     """
 
-    # Step 1 – start with the defaults from the dataclass converted to dict
+    # Step 1 - start with the defaults from the dataclass converted to dict
     data: dict[str, object] = {}
 
     # Determine the YAML path to use (step 2)
@@ -141,7 +168,7 @@ def load_config(config_path: str | os.PathLike | None = None) -> AppConfig:  # n
                 file_data = yaml.safe_load(fp) or {}
             if not isinstance(file_data, dict):
                 logger.warning(
-                    "YAML config file %s must contain a mapping at top-level – ignoring",
+                    "YAML config file %s must contain a mapping at top-level - ignoring",
                     yaml_path,
                 )
                 file_data = {}
@@ -149,7 +176,7 @@ def load_config(config_path: str | os.PathLike | None = None) -> AppConfig:  # n
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to read YAML config from %s: %s", yaml_path, exc)
 
-    # Step 3 – look for env vars prefixed with MALLA_
+    # Step 3 - look for env vars prefixed with MALLA_
     for field_name, field_obj in AppConfig.__dataclass_fields__.items():  # type: ignore[attr-defined]
         env_key = f"{_ENV_PREFIX}{field_name}".upper()
         if env_key in os.environ:
@@ -161,6 +188,42 @@ def load_config(config_path: str | os.PathLike | None = None) -> AppConfig:  # n
 
     logger.debug("Loaded application configuration: %s", config)
     return config
+
+
+def _looks_like_sqlite(cfg: AppConfig) -> bool:
+    """Determine if the config points to SQLite (disallowed in Postgres-only mode)."""
+    if cfg.database_url and cfg.database_url.startswith("sqlite"):
+        return True
+    # Explicit database_file set (and not default) implies SQLite usage
+    if cfg.database_file and (
+        cfg.database_file != _DEFAULT_DB_FILE or os.getenv("MALLA_DATABASE_FILE")
+    ):
+        return True
+    return False
+
+
+def validate_config(cfg: AppConfig) -> None:
+    """Validate required configuration and enforce PostgreSQL-only backend."""
+
+    errors: list[str] = []
+
+    if _looks_like_sqlite(cfg):
+        errors.append(
+            "SQLite backend is not supported; configure PostgreSQL via MALLA_DATABASE_URL "
+            "or MALLA_DATABASE_HOST/PORT/NAME/USER/PASSWORD."
+        )
+
+    if not cfg.database_url and not cfg.database_host:
+        errors.append(
+            "Database configuration missing: set MALLA_DATABASE_URL or "
+            "MALLA_DATABASE_HOST/PORT/NAME/USER/PASSWORD."
+        )
+
+    if not cfg.mqtt_broker_address:
+        errors.append("MQTT broker address is required (MALLA_MQTT_BROKER_ADDRESS).")
+
+    if errors:
+        raise ValueError("Config validation failed:\n - " + "\n - ".join(errors))
 
 
 # Convenience singleton to avoid re-loading throughout the process

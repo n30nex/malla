@@ -8,6 +8,8 @@ import time
 from typing import Any
 
 from flask import Blueprint, jsonify, request
+from flask import Response, stream_with_context
+from psycopg2.extras import RealDictCursor
 
 from ..database import (
     DashboardRepository,
@@ -17,6 +19,7 @@ from ..database import (
     TracerouteRepository,
     get_db_connection,
 )
+from ..database.connection import put_db_connection
 from ..models.traceroute import TraceroutePacket
 from ..services.analytics_service import AnalyticsService
 from ..services.location_service import LocationService
@@ -208,16 +211,35 @@ def api_nodes():
 
         # Check if database tables exist before calling NodeRepository
         db_ready = False
+        conn = None
+        cursor = None
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='node_info'"
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_name = 'node_info'
+                )
+                """
             )
-            db_ready = cursor.fetchone() is not None
-            conn.close()
+            exists_row = cursor.fetchone()
+            db_ready = bool(exists_row[0] if exists_row else False)
         except Exception:
             db_ready = False
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         # Get nodes from repository
         if db_ready:
@@ -258,16 +280,35 @@ def api_nodes_search():
 
         # Check if database tables exist before calling NodeRepository
         db_ready = False
+        conn = None
+        cursor = None
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='node_info'"
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_name = 'node_info'
+                )
+                """
             )
-            db_ready = cursor.fetchone() is not None
-            conn.close()
+            exists_row = cursor.fetchone()
+            db_ready = bool(exists_row[0] if exists_row else False)
         except Exception:
             db_ready = False
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         # If no query, return most popular nodes (by packet count)
         if not query:
@@ -368,23 +409,36 @@ def api_gateways_search():
         # If no query, return most popular gateways (by packet count)
         if not query:
             # Get gateway packet counts to find most popular ones
-            conn = get_db_connection()
-            cursor = conn.cursor()
+            conn = None
+            cursor = None
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
 
-            cursor.execute(
-                """
-                SELECT gateway_id, COUNT(*) as packet_count
-                FROM packet_history
-                WHERE gateway_id IS NOT NULL AND gateway_id != ''
-                GROUP BY gateway_id
-                ORDER BY packet_count DESC
-                LIMIT ?
-            """,
-                (limit,),
-            )
+                cursor.execute(
+                    """
+                    SELECT gateway_id, COUNT(*) as packet_count
+                    FROM packet_history
+                    WHERE gateway_id IS NOT NULL AND gateway_id != ''
+                    GROUP BY gateway_id
+                    ORDER BY packet_count DESC
+                    LIMIT %s
+                """,
+                    (limit,),
+                )
 
-            popular_gateways = cursor.fetchall()
-            conn.close()
+                popular_gateways = cursor.fetchall()
+            finally:
+                if cursor:
+                    cursor.close()
+                if conn:
+                    try:
+                        put_db_connection(conn)
+                    except Exception:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
 
             # Get node names for all gateways
             gateway_node_ids = []
@@ -587,19 +641,298 @@ def api_traceroute_details(packet_id):
     """API endpoint for specific traceroute details."""
     logger.info(f"API traceroute details endpoint accessed for packet {packet_id}")
     try:
-        # Get specific traceroute packet
         traceroute = TracerouteRepository.get_traceroute_details(packet_id)
 
         if not traceroute:
             return jsonify({"error": "Traceroute packet not found"}), 404
 
-        # Convert bytes objects to base64 for JSON serialization
         traceroute = convert_bytes_to_base64(traceroute)
-
         return jsonify(traceroute)
     except Exception as e:
         logger.error(f"Error in API traceroute details: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stream/packets")
+def api_stream_packets():
+    """Server-sent events stream for recent packets (lightweight live feed)."""
+
+    try:
+        last_id = request.args.get("last_id", default=0, type=int)
+    except Exception:
+        last_id = 0
+
+    poll_interval = float(request.args.get("interval", default=1.0))
+    poll_interval = max(0.25, min(poll_interval, 5.0))
+
+    # If no last_id was provided, start from the most recent packet so we only
+    # stream new data after the page is opened/refreshed.
+    if last_id <= 0:
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT COALESCE(MAX(id), 0) FROM packet_history")
+            row = cursor.fetchone()
+            last_id = row[0] if row else 0
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Failed to initialize live stream cursor: {exc}")
+            last_id = 0
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+    def _row_to_payload(row: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = dict(row)
+        payload["timestamp_str"] = time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.gmtime(payload.get("timestamp", 0))
+        )
+        # Add hop_count convenience field
+        hop_start = payload.get("hop_start")
+        hop_limit = payload.get("hop_limit")
+        if hop_start is not None and hop_limit is not None:
+            payload["hop_count"] = hop_start - hop_limit
+        return payload
+
+    @stream_with_context
+    def event_stream():
+        nonlocal last_id
+        conn = None
+        cursor = None
+
+        def _cleanup_conn() -> None:
+            nonlocal conn, cursor
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            conn = None
+            cursor = None
+
+        try:
+            while True:
+                try:
+                    if conn is None:
+                        conn = get_db_connection()
+                        cursor = conn.cursor(cursor_factory=RealDictCursor)
+                    cursor.execute(
+                        """
+                        SELECT
+                            id, timestamp, from_node_id, to_node_id, gateway_id,
+                            channel_id, portnum_name, rssi, snr, hop_limit, hop_start,
+                            mesh_packet_id
+                        FROM packet_history
+                        WHERE id > %s
+                        ORDER BY id ASC
+                        LIMIT 200
+                        """,
+                        (last_id,),
+                    )
+                    rows = cursor.fetchall()
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(f"Live stream query failed: {exc}")
+                    rows = []
+                    _cleanup_conn()
+
+                if rows:
+                    for row in rows:
+                        last_id = max(last_id, row["id"])
+                        payload = _row_to_payload(row)
+                        event_json = json.dumps(payload, default=str)
+                        yield f"data: {event_json}\n\n"
+                else:
+                    # keep-alive comment to prevent proxy timeouts
+                    yield ": keep-alive\n\n"
+
+                time.sleep(poll_interval)
+        finally:
+            _cleanup_conn()
+
+    headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+    return Response(event_stream(), headers=headers)
+
+
+@api_bp.route("/chat/messages")
+def api_chat_messages():
+    """API endpoint for recent text messages."""
+    logger.info("API chat messages endpoint accessed")
+    try:
+        limit = request.args.get("limit", 100, type=int)
+        limit = min(max(limit, 1), 500)
+        after_id = request.args.get("after_id", 0, type=int)
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            where_clause = "WHERE portnum_name = 'TEXT_MESSAGE_APP'"
+            params: list[Any] = []
+            if after_id > 0:
+                where_clause += " AND id > %s"
+                params.append(after_id)
+
+            query = f"""
+                SELECT
+                    id, timestamp, from_node_id, to_node_id, gateway_id,
+                    raw_payload, mesh_packet_id
+                FROM packet_history
+                {where_clause}
+                ORDER BY id DESC
+                LIMIT %s
+            """
+            params.append(limit)
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    conn.close()
+
+        if not rows:
+            return jsonify({"messages": []})
+
+        # ------------------------------------------------------------------
+        # Group by mesh_packet_id to avoid duplicates and surface receivers
+        # ------------------------------------------------------------------
+        def _decode_text(raw: bytes | str | None) -> str | None:
+            if raw is None:
+                return None
+            try:
+                return bytes(raw).decode("utf-8", errors="replace")
+            except Exception:
+                return None
+
+        grouped: dict[Any, dict[str, Any]] = {}
+        node_ids: set[int] = set()
+        gateway_node_ids: set[int] = set()
+
+        for row in rows:
+            mesh_id = row.get("mesh_packet_id")
+            key = mesh_id if mesh_id not in (None, 0) else f"row-{row['id']}"
+
+            text = _decode_text(row.get("raw_payload"))
+
+            if key not in grouped:
+                grouped[key] = {
+                    "mesh_packet_id": mesh_id,
+                    "max_row_id": row["id"],
+                    "timestamp": row["timestamp"],
+                    "from_node_id": row.get("from_node_id"),
+                    "to_node_id": row.get("to_node_id"),
+                    "gateway_ids": set(),
+                    "text": text,
+                }
+            grp = grouped[key]
+            grp["max_row_id"] = max(grp["max_row_id"], row["id"])
+            grp["timestamp"] = max(grp["timestamp"], row["timestamp"])
+            if grp.get("text") is None and text:
+                grp["text"] = text
+            if grp.get("from_node_id") is None and row.get("from_node_id") is not None:
+                grp["from_node_id"] = row.get("from_node_id")
+            if grp.get("to_node_id") is None and row.get("to_node_id") not in (
+                None,
+                4294967295,
+            ):
+                grp["to_node_id"] = row.get("to_node_id")
+            if row.get("gateway_id"):
+                grp["gateway_ids"].add(row["gateway_id"])
+
+            # Collect node IDs for name lookups
+            if row.get("from_node_id"):
+                node_ids.add(row["from_node_id"])
+            if row.get("to_node_id") and row.get("to_node_id") != 4294967295:
+                node_ids.add(row["to_node_id"])
+            gw = row.get("gateway_id")
+            if gw and isinstance(gw, str) and gw.startswith("!"):
+                try:
+                    gateway_node_ids.add(int(gw[1:], 16))
+                except ValueError:
+                    pass
+
+        # Resolve node names (senders/recipients + gateways)
+        name_map = get_bulk_node_short_names(list(node_ids | gateway_node_ids))
+
+        messages: list[dict[str, Any]] = []
+        for grp in grouped.values():
+            from_node_id = grp.get("from_node_id")
+            to_node_id = grp.get("to_node_id")
+
+            heard_by: list[dict[str, Any]] = []
+            for gw in sorted(grp["gateway_ids"]):
+                display_name = gw
+                if gw and gw.startswith("!"):
+                    try:
+                        gw_id_int = int(gw[1:], 16)
+                        display_name = name_map.get(gw_id_int, gw)
+                    except ValueError:
+                        pass
+                heard_by.append(
+                    {
+                        "id": gw,
+                        "display": display_name,
+                    }
+                )
+
+            messages.append(
+                {
+                    "id": grp["max_row_id"],
+                    "mesh_packet_id": grp.get("mesh_packet_id"),
+                    "timestamp": grp["timestamp"],
+                    "timestamp_str": time.strftime(
+                        "%Y-%m-%d %H:%M:%S", time.gmtime(grp["timestamp"])
+                    ),
+                    "from_node_id": from_node_id,
+                    "to_node_id": to_node_id,
+                    "gateway_ids": list(grp["gateway_ids"]),
+                    "from_hex": f"!{from_node_id:08x}"
+                    if from_node_id is not None
+                    else None,
+                    "to_hex": f"!{to_node_id:08x}"
+                    if to_node_id is not None and to_node_id != 4294967295
+                    else None,
+                    "from_name": name_map.get(from_node_id),
+                    "to_name": name_map.get(to_node_id),
+                    "text": grp.get("text"),
+                    "heard_by": heard_by,
+                    "heard_by_count": len(heard_by),
+                }
+            )
+
+        # Sort newest-first to mirror UI expectation
+        messages.sort(key=lambda m: m["timestamp"], reverse=True)
+
+        return jsonify({"messages": messages})
+    except Exception as e:
+        logger.error(f"Error in API chat messages: {e}")
+        return jsonify({"error": str(e), "messages": []}), 500
 
 
 @api_bp.route("/locations")
@@ -616,13 +949,17 @@ def api_locations():
         # Build filters from request parameters
         filters = {}
 
-        # Always limit to last 14 days for performance
-        from datetime import datetime, timedelta
+        # Allow callers to bypass the 14-day window when they want a full precache
+        span = request.args.get("span", "").lower()
 
-        end_time = datetime.now()
-        start_time = end_time - timedelta(days=14)
-        filters["start_time"] = start_time.timestamp()
-        filters["end_time"] = end_time.timestamp()
+        if span != "all":
+            # Default: last 14 days to keep payloads reasonable
+            from datetime import datetime, timedelta
+
+            end_time = datetime.now()
+            start_time = end_time - timedelta(days=14)
+            filters["start_time"] = start_time.timestamp()
+            filters["end_time"] = end_time.timestamp()
 
         # Gateway filter (keep this server-side for performance)
         gateway_id_arg = request.args.get("gateway_id")
@@ -644,8 +981,9 @@ def api_locations():
         from ..services.traceroute_service import TracerouteService
 
         hours = 24  # Default to 24 hours for network analysis
-        time_diff = filters["end_time"] - filters["start_time"]
-        hours = max(1, min(168, int(time_diff / 3600)))  # Between 1 and 168 hours
+        if filters.get("start_time") and filters.get("end_time"):
+            time_diff = filters["end_time"] - filters["start_time"]
+            hours = max(1, min(168, int(time_diff / 3600)))  # Between 1 and 168 hours
 
         network_filters = {}
         if filters.get("start_time"):
@@ -703,6 +1041,54 @@ def api_traceroute_patterns():
     except Exception as e:
         logger.error(f"Error in API traceroute patterns: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/live/node-stats")
+def api_live_node_stats():
+    """Lightweight stats for live map hover/tooltips."""
+    logger.info("API live node stats endpoint accessed")
+    try:
+        lookback_hours = request.args.get("hours", 24, type=int)
+        lookback_hours = max(1, min(lookback_hours, 168))
+
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            """
+            SELECT
+                from_node_id AS node_id,
+                MAX(timestamp) AS last_seen,
+                COUNT(*) AS pkt_count,
+                AVG(CAST(rssi AS FLOAT)) AS avg_rssi,
+                AVG(CAST(snr AS FLOAT)) AS avg_snr,
+                AVG(CASE WHEN hop_start IS NOT NULL AND hop_limit IS NOT NULL THEN hop_start - hop_limit END) AS avg_hops,
+                MIN(CASE WHEN hop_start IS NOT NULL AND hop_limit IS NOT NULL THEN hop_start - hop_limit END) AS min_hops,
+                MAX(CASE WHEN hop_start IS NOT NULL AND hop_limit IS NOT NULL THEN hop_start - hop_limit END) AS max_hops
+            FROM packet_history
+            WHERE timestamp >= (EXTRACT(EPOCH FROM NOW()) - (%s * 3600))
+              AND from_node_id IS NOT NULL
+            GROUP BY from_node_id
+            """,
+            (lookback_hours,),
+        )
+        rows = cursor.fetchall() or []
+        cursor.close()
+        put_db_connection(conn)
+
+        return jsonify({"stats": rows, "hours": lookback_hours})
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"Error in API live node stats: {exc}")
+        try:
+            if cursor:
+                cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                put_db_connection(conn)
+        except Exception:
+            pass
+        return jsonify({"error": str(exc), "stats": []}), 500
 
 
 @api_bp.route("/node/<node_id>/info")
@@ -927,7 +1313,14 @@ def api_traceroute_hops_nodes():
 
         cursor.execute(query)
         nodes_data = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+        cursor.close()
+        try:
+            put_db_connection(conn)
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
         db_time = time.time() - db_start
 
         # Get location data for these nodes only (avoid decoding positions for the whole network)

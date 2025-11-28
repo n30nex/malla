@@ -29,7 +29,17 @@ def run_command(cmd, capture_output=False):
 def install_test_dependencies():
     """Install test dependencies."""
     print("Installing test dependencies...")
-    run_command([sys.executable, "-m", "pip", "install", "-e", ".[test]"])
+    # Use the dev extra (defined in pyproject) since there is no dedicated [test] extra
+    run_command([sys.executable, "-m", "pip", "install", "-e", ".[dev]"])
+
+
+def ensure_runtime_dependencies():
+    """Ensure core runtime deps (like paho-mqtt) are present for tests."""
+    try:
+        import paho.mqtt.client  # noqa: F401
+    except Exception:
+        print("paho-mqtt not found; installing it for tests...")
+        run_command([sys.executable, "-m", "pip", "install", "paho-mqtt>=2.1.0"])
 
 
 def run_unit_tests(verbose=False, coverage=False, parallel=None):
@@ -204,14 +214,10 @@ def generate_coverage_report():
 def main():
     """Main test runner function."""
     parser = argparse.ArgumentParser(description="Test runner for Mesh Health Web UI")
-    parser.add_argument(
-        "--install", action="store_true", help="Install test dependencies"
-    )
+    parser.add_argument("--install", action="store_true", help="Install test dependencies")
     parser.add_argument("--check", action="store_true", help="Check test environment")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
-    parser.add_argument(
-        "--coverage", action="store_true", help="Generate coverage report"
-    )
+    parser.add_argument("--coverage", action="store_true", help="Generate coverage report")
     parser.add_argument(
         "-n",
         "--parallel",
@@ -224,12 +230,8 @@ def main():
 
     # Unit tests
     unit_parser = subparsers.add_parser("unit", help="Run unit tests")
-    unit_parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Verbose output"
-    )
-    unit_parser.add_argument(
-        "--coverage", action="store_true", help="Generate coverage report"
-    )
+    unit_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    unit_parser.add_argument("--coverage", action="store_true", help="Generate coverage report")
     unit_parser.add_argument(
         "-n",
         "--parallel",
@@ -239,15 +241,9 @@ def main():
     )
 
     # Integration tests
-    integration_parser = subparsers.add_parser(
-        "integration", help="Run integration tests"
-    )
-    integration_parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Verbose output"
-    )
-    integration_parser.add_argument(
-        "--coverage", action="store_true", help="Generate coverage report"
-    )
+    integration_parser = subparsers.add_parser("integration", help="Run integration tests")
+    integration_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    integration_parser.add_argument("--coverage", action="store_true", help="Generate coverage report")
     integration_parser.add_argument(
         "-n",
         "--parallel",
@@ -258,12 +254,8 @@ def main():
 
     # API tests
     api_parser = subparsers.add_parser("api", help="Run API tests")
-    api_parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Verbose output"
-    )
-    api_parser.add_argument(
-        "--coverage", action="store_true", help="Generate coverage report"
-    )
+    api_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    api_parser.add_argument("--coverage", action="store_true", help="Generate coverage report")
     api_parser.add_argument(
         "-n",
         "--parallel",
@@ -274,12 +266,8 @@ def main():
 
     # All tests
     all_parser = subparsers.add_parser("all", help="Run all tests")
-    all_parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Verbose output"
-    )
-    all_parser.add_argument(
-        "--coverage", action="store_true", help="Generate coverage report"
-    )
+    all_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    all_parser.add_argument("--coverage", action="store_true", help="Generate coverage report")
     all_parser.add_argument(
         "-n",
         "--parallel",
@@ -290,9 +278,7 @@ def main():
 
     # Slow tests
     slow_parser = subparsers.add_parser("slow", help="Run slow tests")
-    slow_parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Verbose output"
-    )
+    slow_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     slow_parser.add_argument(
         "-n",
         "--parallel",
@@ -310,11 +296,13 @@ def main():
         install_test_dependencies()
         return
 
+    ensure_runtime_dependencies()
+
     if args.check:
         if check_test_environment():
-            print("✓ Test environment is ready")
+            print("? Test environment is ready")
         else:
-            print("✗ Test environment needs setup")
+            print("? Test environment needs setup")
             sys.exit(1)
         return
 
@@ -335,9 +323,7 @@ def main():
     if args.command == "unit":
         run_unit_tests(args.verbose, args.coverage, getattr(args, "parallel", None))
     elif args.command == "integration":
-        run_integration_tests(
-            args.verbose, args.coverage, getattr(args, "parallel", None)
-        )
+        run_integration_tests(args.verbose, args.coverage, getattr(args, "parallel", None))
     elif args.command == "api":
         run_api_tests(args.verbose, args.coverage, getattr(args, "parallel", None))
     elif args.command == "all":

@@ -11,10 +11,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from meshtastic import mesh_pb2
+from psycopg2.extras import RealDictCursor
 
 from ..utils.formatting import format_time_ago
 from ..utils.node_utils import get_bulk_node_short_names
-from .connection import get_db_connection
+from .connection import get_db_connection, put_db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ class DashboardRepository:
 
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Calculate time thresholds
             twenty_four_hours_ago = time.time() - (24 * 3600)
@@ -39,7 +40,7 @@ class DashboardRepository:
             gateway_filter = ""
             gateway_params = []
             if gateway_id:
-                gateway_filter = " AND gateway_id = ?"
+                gateway_filter = " AND gateway_id = %s"
                 gateway_params = [gateway_id]
 
             # Get basic node count (this is fast and separate)
@@ -54,15 +55,15 @@ class DashboardRepository:
                 SELECT
                     COUNT(*) as total_packets,
                     COUNT(DISTINCT CASE WHEN from_node_id IS NOT NULL THEN from_node_id END) as active_nodes_24h,
-                    COUNT(CASE WHEN timestamp > ? THEN 1 END) as recent_packets,
+                    COUNT(CASE WHEN timestamp > %s THEN 1 END) as recent_packets,
                     AVG(CASE WHEN rssi IS NOT NULL AND rssi != 0 THEN rssi END) as avg_rssi,
                     AVG(CASE WHEN snr IS NOT NULL THEN snr END) as avg_snr,
-                    SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) as successful_packets,
+                    SUM(CASE WHEN processed_successfully = TRUE THEN 1 ELSE 0 END) as successful_packets,
                     CASE WHEN COUNT(*) > 0
-                         THEN ROUND(SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1)
+                         THEN ROUND(SUM(CASE WHEN processed_successfully = TRUE THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1)
                          ELSE 0 END as success_rate
                 FROM packet_history
-                WHERE timestamp > ?{gateway_filter}
+                WHERE timestamp > %s{gateway_filter}
             """,
                 params,
             )
@@ -76,12 +77,12 @@ class DashboardRepository:
             )
             total_packets_all_time = cursor.fetchone()["total"]
 
-            # Get packet types separately (more efficient than JSON aggregation in SQLite)
+            # Get packet types separately (more efficient than JSON aggregation in PostgreSQL)
             cursor.execute(
                 f"""
                 SELECT portnum_name, COUNT(*) as count
                 FROM packet_history
-                WHERE portnum_name IS NOT NULL AND timestamp > ?{gateway_filter}
+                WHERE portnum_name IS NOT NULL AND timestamp > %s{gateway_filter}
                 GROUP BY portnum_name
                 ORDER BY count DESC
             """,
@@ -90,7 +91,8 @@ class DashboardRepository:
 
             packet_types = [dict(row) for row in cursor.fetchall()]
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
 
             return {
                 "total_nodes": total_nodes,
@@ -160,75 +162,75 @@ class PacketRepository:
 
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Build WHERE clause
             where_conditions = []
             params = []
 
             if filters.get("start_time"):
-                where_conditions.append("timestamp >= ?")
+                where_conditions.append("timestamp >= %s")
                 params.append(filters["start_time"])
 
             if filters.get("end_time"):
-                where_conditions.append("timestamp <= ?")
+                where_conditions.append("timestamp <= %s")
                 params.append(filters["end_time"])
 
             if filters.get("from_node"):
-                where_conditions.append("from_node_id = ?")
+                where_conditions.append("from_node_id = %s")
                 params.append(filters["from_node"])
 
             if filters.get("to_node"):
-                where_conditions.append("to_node_id = ?")
+                where_conditions.append("to_node_id = %s")
                 params.append(filters["to_node"])
 
             if filters.get("portnum"):
-                where_conditions.append("portnum_name = ?")
+                where_conditions.append("portnum_name = %s")
                 params.append(filters["portnum"])
 
             if filters.get("min_rssi"):
-                where_conditions.append("rssi >= ?")
+                where_conditions.append("rssi >= %s")
                 params.append(filters["min_rssi"])
 
             if filters.get("max_rssi"):
-                where_conditions.append("rssi <= ?")
+                where_conditions.append("rssi <= %s")
                 params.append(filters["max_rssi"])
 
             if filters.get("gateway_id"):
-                where_conditions.append("gateway_id = ?")
+                where_conditions.append("gateway_id = %s")
                 params.append(filters["gateway_id"])
 
             # New: filter by primary_channel when provided (matches ServiceEnvelope channel_id)
             if filters.get("primary_channel"):
-                where_conditions.append("channel_id = ?")
+                where_conditions.append("channel_id = %s")
                 params.append(filters["primary_channel"])
 
             if filters.get("hop_count") is not None:
-                where_conditions.append("(hop_start - hop_limit) = ?")
+                where_conditions.append("(hop_start - hop_limit) = %s")
                 params.append(filters["hop_count"])
 
             # Generic exclusion filters for from/to node IDs
             if filters.get("exclude_from") is not None:
                 # Exclude packets whose sender matches the specified node ID
                 # Optimized: Use simple != condition to allow index usage
-                where_conditions.append("from_node_id != ?")
+                where_conditions.append("from_node_id != %s")
                 params.append(filters["exclude_from"])
 
             if filters.get("exclude_to") is not None:
                 # Exclude packets whose destination matches the specified node ID
                 # Optimized: Use simple != condition to allow index usage
-                where_conditions.append("to_node_id != ?")
+                where_conditions.append("to_node_id != %s")
                 params.append(filters["exclude_to"])
 
             # Search functionality
             if search:
                 # Search in multiple text fields
                 search_condition = """(
-                    portnum_name LIKE ? OR
-                    gateway_id LIKE ? OR
-                    channel_id LIKE ? OR
-                    CAST(from_node_id AS TEXT) LIKE ? OR
-                    CAST(to_node_id AS TEXT) LIKE ?
+                    portnum_name LIKE %s OR
+                    gateway_id LIKE %s OR
+                    channel_id LIKE %s OR
+                    CAST(from_node_id AS TEXT) LIKE %s OR
+                    CAST(to_node_id AS TEXT) LIKE %s
                 )"""
                 where_conditions.append(search_condition)
                 search_param = f"%{search}%"
@@ -254,10 +256,10 @@ class PacketRepository:
                     )
 
                 # Add time window to limit data scan (improves performance dramatically)
-                # If no explicit time filter, default to last 7 days for reasonable performance
+                # If no explicit time filter, default to last 24 hours for reasonable performance
                 if not filters.get("start_time") and not filters.get("end_time"):
-                    recent_cutoff = time.time() - (7 * 24 * 3600)  # 7 days ago
-                    where_clause += " AND timestamp >= ?"
+                    recent_cutoff = time.time() - (24 * 3600)  # 24 hours ago
+                    where_clause += " AND timestamp >= %s"
                     params.append(recent_cutoff)
 
                 # PERFORMANCE FIX: Skip expensive total count for grouped queries
@@ -290,12 +292,12 @@ class PacketRepository:
                         payload_length, processed_successfully, raw_payload,
                         via_mqtt, want_ack, priority, delayed, channel_index, rx_time,
                         pki_encrypted, next_hop, relay_node, tx_after,
-                        datetime(timestamp, 'unixepoch') as timestamp_str,
+                        to_timestamp(timestamp) as timestamp_str,
                         (hop_start - hop_limit) as hop_count
                     FROM packet_history
                     {where_clause}
                     ORDER BY timestamp DESC
-                    LIMIT ?
+                    LIMIT %s
                 """
 
                 cursor.execute(query, params + [fetch_limit])
@@ -524,12 +526,12 @@ class PacketRepository:
                         payload_length, processed_successfully, raw_payload,
                         via_mqtt, want_ack, priority, delayed, channel_index, rx_time,
                         pki_encrypted, next_hop, relay_node, tx_after,
-                        datetime(timestamp, 'unixepoch') as timestamp_str,
+                        to_timestamp(timestamp) as timestamp_str,
                         (hop_start - hop_limit) as hop_count
                     FROM packet_history
                     {where_clause}
                     ORDER BY {order_by} {order_dir.upper()}
-                    LIMIT ? OFFSET ?
+                    LIMIT %s OFFSET %s
                 """
 
                 query_params = params + [limit, offset]
@@ -564,7 +566,8 @@ class PacketRepository:
 
                     packets.append(packet)
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
 
             # Handle None total_count for grouped queries
             if total_count is None:
@@ -617,26 +620,26 @@ class PacketRepository:
 
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Build WHERE clause
             where_conditions = ["rssi IS NOT NULL", "snr IS NOT NULL"]
             params = []
 
             if filters.get("gateway_id"):
-                where_conditions.append("gateway_id = ?")
+                where_conditions.append("gateway_id = %s")
                 params.append(filters["gateway_id"])
 
             if filters.get("from_node"):
-                where_conditions.append("from_node_id = ?")
+                where_conditions.append("from_node_id = %s")
                 params.append(filters["from_node"])
 
             if filters.get("start_time"):
-                where_conditions.append("timestamp >= ?")
+                where_conditions.append("timestamp >= %s")
                 params.append(filters["start_time"])
 
             if filters.get("end_time"):
-                where_conditions.append("timestamp <= ?")
+                where_conditions.append("timestamp <= %s")
                 params.append(filters["end_time"])
 
             where_clause = "WHERE " + " AND ".join(where_conditions)
@@ -644,7 +647,7 @@ class PacketRepository:
             query = f"""
                 SELECT
                     timestamp, from_node_id, to_node_id, rssi, snr, portnum_name,
-                    datetime(timestamp, 'unixepoch') as timestamp_str
+                    to_timestamp(timestamp) as timestamp_str
                 FROM packet_history
                 {where_clause}
                 ORDER BY timestamp DESC
@@ -654,7 +657,8 @@ class PacketRepository:
             cursor.execute(query, params)
             data = [dict(row) for row in cursor.fetchall()]
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
             return data
 
         except Exception as e:
@@ -666,7 +670,7 @@ class PacketRepository:
         """Get list of unique gateway IDs."""
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             cursor.execute("""
                 SELECT DISTINCT gateway_id
@@ -676,7 +680,8 @@ class PacketRepository:
             """)
 
             gateways = [row["gateway_id"] for row in cursor.fetchall()]
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
             return gateways
 
         except Exception as e:
@@ -688,7 +693,7 @@ class PacketRepository:
         """Get count of unique gateway IDs (optimized for performance)."""
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             cursor.execute("""
                 SELECT COUNT(DISTINCT gateway_id)
@@ -697,7 +702,8 @@ class PacketRepository:
             """)
 
             count = cursor.fetchone()[0]
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
             return count
 
         except Exception as e:
@@ -724,22 +730,22 @@ class PacketRepository:
 
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Build WHERE clause for time and node filters
             where_conditions = []
             params = [gateway1_id, gateway2_id]
 
             if filters.get("start_time"):
-                where_conditions.append("p1.timestamp >= ?")
+                where_conditions.append("p1.timestamp >= %s")
                 params.append(filters["start_time"])
 
             if filters.get("end_time"):
-                where_conditions.append("p1.timestamp <= ?")
+                where_conditions.append("p1.timestamp <= %s")
                 params.append(filters["end_time"])
 
             if filters.get("from_node"):
-                where_conditions.append("p1.from_node_id = ?")
+                where_conditions.append("p1.from_node_id = %s")
                 params.append(filters["from_node"])
 
             where_clause = ""
@@ -764,7 +770,7 @@ class PacketRepository:
                     p2.snr as gateway2_snr,
                     (p2.rssi - p1.rssi) as rssi_diff,
                     (p2.snr - p1.snr) as snr_diff,
-                    datetime(p1.timestamp, 'unixepoch') as timestamp_str,
+                    to_timestamp(p1.timestamp) as timestamp_str,
                     ABS(p1.timestamp - p2.timestamp) as time_diff
                 FROM packet_history p1
                 INNER JOIN packet_history p2 ON (
@@ -773,8 +779,8 @@ class PacketRepository:
                     AND p1.hop_limit = p2.hop_limit
                     AND ABS(p1.timestamp - p2.timestamp) < 30
                 )
-                WHERE p1.gateway_id = ?
-                    AND p2.gateway_id = ?
+                WHERE p1.gateway_id = %s
+                    AND p2.gateway_id = %s
                     AND p1.mesh_packet_id IS NOT NULL
                     AND p1.rssi IS NOT NULL
                     AND p1.snr IS NOT NULL
@@ -898,7 +904,8 @@ class PacketRepository:
                         }
                     )
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
 
             return {"common_packets": common_packets, "statistics": stats}
 
@@ -925,7 +932,7 @@ class NodeRepository:
 
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Build search and filter conditions for node_info
             where_conditions = []
@@ -933,10 +940,10 @@ class NodeRepository:
 
             if search:
                 search_conditions = [
-                    "ni.long_name LIKE ?",
-                    "ni.short_name LIKE ?",
-                    "ni.hw_model LIKE ?",
-                    "printf('!%08x', ni.node_id) LIKE ?",
+                    "ni.long_name LIKE %s",
+                    "ni.short_name LIKE %s",
+                    "ni.hw_model LIKE %s",
+                    "('!' || lpad(to_hex(ni.node_id), 8, '0')) LIKE %s",
                 ]
                 search_param = f"%{search}%"
                 where_conditions.append("(" + " OR ".join(search_conditions) + ")")
@@ -944,15 +951,15 @@ class NodeRepository:
 
             # Add filter conditions
             if filters.get("hw_model"):
-                where_conditions.append("ni.hw_model = ?")
+                where_conditions.append("ni.hw_model = %s")
                 params.append(filters["hw_model"])
 
             if filters.get("role"):
-                where_conditions.append("ni.role = ?")
+                where_conditions.append("ni.role = %s")
                 params.append(filters["role"])
 
             if filters.get("primary_channel"):
-                where_conditions.append("ni.primary_channel = ?")
+                where_conditions.append("ni.primary_channel = %s")
                 params.append(filters["primary_channel"])
 
             # Add named_only filter
@@ -1026,11 +1033,11 @@ class NodeRepository:
                         ni.role,
                         ni.primary_channel,
                         ni.last_updated,
-                        printf('!%08x', ni.node_id) as hex_id,
+                        ('!' || lpad(to_hex(ni.node_id), 8, '0')) as hex_id,
                         COALESCE(stats.packet_count_24h, 0) as packet_count_24h,
                         COALESCE(gstats.gateway_packet_count_24h, 0) as gateway_packet_count_24h,
                         COALESCE(stats.last_packet_time, ni.last_updated) as last_packet_time,
-                        datetime(COALESCE(stats.last_packet_time, ni.last_updated), 'unixepoch') as last_packet_str
+                        to_timestamp(COALESCE(stats.last_packet_time, ni.last_updated)) as last_packet_str
                     FROM node_info ni
                     LEFT JOIN (
                         SELECT
@@ -1038,7 +1045,7 @@ class NodeRepository:
                             COUNT(*) as packet_count_24h,
                             MAX(timestamp) as last_packet_time
                         FROM packet_history
-                        WHERE timestamp > (strftime('%s', 'now') - 86400)
+                        WHERE timestamp > (EXTRACT(EPOCH FROM NOW()) - 86400)
                         GROUP BY from_node_id
                     ) stats ON ni.node_id = stats.node_id
                     LEFT JOIN (
@@ -1046,13 +1053,13 @@ class NodeRepository:
                             gateway_id,
                             COUNT(*) as gateway_packet_count_24h
                         FROM packet_history
-                        WHERE timestamp > (strftime('%s', 'now') - 86400)
+                        WHERE timestamp > (EXTRACT(EPOCH FROM NOW()) - 86400)
                           AND gateway_id IS NOT NULL AND gateway_id != ''
                         GROUP BY gateway_id
-                    ) gstats ON gstats.gateway_id = printf('!%08x', ni.node_id)
+                    ) gstats ON gstats.gateway_id = ('!' || lpad(to_hex(ni.node_id), 8, '0'))
                     {where_clause}
                     ORDER BY {order_column} {order_dir}
-                    LIMIT ? OFFSET ?
+                    LIMIT %s OFFSET %s
                 """
             else:
                 # Use fast query with only node_info
@@ -1073,15 +1080,15 @@ class NodeRepository:
                         ni.role,
                         ni.primary_channel,
                         ni.last_updated,
-                        printf('!%08x', ni.node_id) as hex_id,
+                        ('!' || lpad(to_hex(ni.node_id), 8, '0')) as hex_id,
                         0 as packet_count_24h,
                         0 as gateway_packet_count_24h,
                         ni.last_updated as last_packet_time,
-                        datetime(ni.last_updated, 'unixepoch') as last_packet_str
+                        to_timestamp(ni.last_updated) as last_packet_str
                     FROM node_info ni
                     {where_clause}
                     ORDER BY {order_column} {order_dir}
-                    LIMIT ? OFFSET ?
+                    LIMIT %s OFFSET %s
                 """
 
             # Execute query with parameters
@@ -1089,7 +1096,8 @@ class NodeRepository:
             cursor.execute(query, query_params)
             nodes = [dict(row) for row in cursor.fetchall()]
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
 
             return {
                 "nodes": nodes,
@@ -1107,7 +1115,7 @@ class NodeRepository:
         """Get comprehensive details about a specific node."""
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # ------------------------------------------------------------------
             # Validate / normalise *node_id*
@@ -1154,7 +1162,7 @@ class NodeRepository:
                     THEN (p.hop_start - p.hop_limit) ELSE NULL END) as avg_hops
             FROM packet_history p
             LEFT JOIN node_info n ON p.from_node_id = n.node_id
-            WHERE p.from_node_id = ?
+            WHERE p.from_node_id = %s
             GROUP BY p.from_node_id, n.long_name, n.short_name, n.hw_model, n.role, n.primary_channel
             """
 
@@ -1163,10 +1171,11 @@ class NodeRepository:
 
             if not node_row:
                 # Check if node exists in node_info but has no packets
-                cursor.execute("SELECT * FROM node_info WHERE node_id = ?", (node_id,))
+                cursor.execute("SELECT * FROM node_info WHERE node_id = %s", (node_id,))
                 node_info_row = cursor.fetchone()
                 if not node_info_row:
-                    conn.close()
+                    cursor.close()
+                    put_db_connection(conn)
                     return None
 
                 # Node exists but has no packets
@@ -1191,7 +1200,8 @@ class NodeRepository:
                     "avg_snr": None,
                     "avg_hops": None,
                 }
-                conn.close()
+                cursor.close()
+                put_db_connection(conn)
                 return {
                     "node": node_info,
                     "recent_packets": [],
@@ -1247,7 +1257,7 @@ class NodeRepository:
                 CASE WHEN p.hop_start IS NOT NULL AND p.hop_limit IS NOT NULL
                      THEN (p.hop_start - p.hop_limit) ELSE NULL END as hop_count
             FROM packet_history p
-            WHERE p.from_node_id = ?
+            WHERE p.from_node_id = %s
             ORDER BY p.timestamp DESC
             LIMIT 100
             """
@@ -1512,7 +1522,7 @@ class NodeRepository:
                 p.id, p.timestamp, p.from_node_id, p.to_node_id, p.portnum_name,
                 p.rssi, p.snr, p.hop_start, p.hop_limit
             FROM packet_history p
-            WHERE p.gateway_id = ? AND (p.from_node_id IS NULL OR p.from_node_id != ?)
+            WHERE p.gateway_id = %s AND (p.from_node_id IS NULL OR p.from_node_id != %s)
             ORDER BY p.timestamp DESC
             LIMIT 100
             """
@@ -1595,7 +1605,7 @@ class NodeRepository:
                 AVG(CAST(rssi AS FLOAT)) as avg_rssi,
                 AVG(CAST(snr AS FLOAT)) as avg_snr
             FROM packet_history
-            WHERE from_node_id = ?
+            WHERE from_node_id = %s
             GROUP BY portnum_name
             ORDER BY count DESC
             """
@@ -1636,9 +1646,11 @@ class NodeRepository:
                     THEN CAST(p.snr AS FLOAT) ELSE NULL END) as direct_snr,
                 COUNT(CASE WHEN (p.hop_start - p.hop_limit) = 0 THEN 1 END) as direct_packet_count
             FROM packet_history p
-            WHERE p.from_node_id = ? AND p.gateway_id IS NOT NULL
+            WHERE p.from_node_id = %s AND p.gateway_id IS NOT NULL
             GROUP BY p.gateway_id
-            ORDER BY (direct_packet_count > 0) DESC, packet_count DESC
+            ORDER BY
+                (COUNT(CASE WHEN (p.hop_start - p.hop_limit) = 0 THEN 1 END) > 0) DESC,
+                COUNT(*) DESC
             LIMIT 15
             """
 
@@ -1733,7 +1745,8 @@ class NodeRepository:
                     }
                 )
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
 
             # Get location information using the new, efficient LocationRepository helper
             location_info = None
@@ -1894,7 +1907,7 @@ class NodeRepository:
         conn = None
         if cursor is None:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
             should_close = True
 
         try:
@@ -1905,8 +1918,8 @@ class NodeRepository:
             gateway_hex_ids = [f"!{gw_id:08x}" for gw_id in gateway_node_ids]
 
             # Part 1: Packets these gateways received directly (0 hops) from other nodes
-            gw_placeholders = ",".join(["?"] * len(gateway_hex_ids))
-            lb_placeholders = ",".join(["?"] * len(relay_last_bytes))
+            gw_placeholders = ",".join(["%s"] * len(gateway_hex_ids))
+            lb_placeholders = ",".join(["%s"] * len(relay_last_bytes))
             candidates_query_part1 = f"""
             SELECT DISTINCT p.from_node_id as node_id, p.gateway_id, (p.from_node_id & 0xFF) as last_byte
             FROM packet_history p
@@ -1922,7 +1935,7 @@ class NodeRepository:
             part1_results = cursor.fetchall()
 
             # Part 2: Packets from these gateway nodes received directly by other gateways
-            gw_id_placeholders = ",".join(["?"] * len(gateway_node_ids))
+            gw_id_placeholders = ",".join(["%s"] * len(gateway_node_ids))
             candidates_query_part2 = f"""
             SELECT DISTINCT p.gateway_id, p.from_node_id
             FROM packet_history p
@@ -2025,7 +2038,7 @@ class NodeRepository:
         finally:
             if should_close and conn:
                 cursor.close()
-                conn.close()
+                put_db_connection(conn)
 
     @staticmethod
     def get_relay_node_analysis(node_id: int, limit: int = 50) -> list[dict[str, Any]]:
@@ -2044,7 +2057,7 @@ class NodeRepository:
         """
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Query to get relay_node values with counts and signal stats for packets reported by this gateway
             relay_query = """
@@ -2058,12 +2071,12 @@ class NodeRepository:
                 MIN(snr) as min_snr,
                 MAX(snr) as max_snr
             FROM packet_history
-            WHERE gateway_id = ?
+            WHERE gateway_id = %s
                 AND relay_node IS NOT NULL
                 AND relay_node != 0
             GROUP BY relay_node
             ORDER BY count DESC
-            LIMIT ?
+            LIMIT %s
             """
 
             # Convert node_id to gateway hex format
@@ -2073,7 +2086,7 @@ class NodeRepository:
 
             if not relay_rows:
                 cursor.close()
-                conn.close()
+                put_db_connection(conn)
                 return []
 
             # Collect all unique relay_last_byte values
@@ -2114,7 +2127,7 @@ class NodeRepository:
                 )
 
             cursor.close()
-            conn.close()
+            put_db_connection(conn)
             return relay_node_stats
 
         except Exception as e:
@@ -2126,7 +2139,7 @@ class NodeRepository:
         """Get basic node information for tooltips and pickers (optimized for speed)."""
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Single optimized query for tooltip data
             query = """
@@ -2135,10 +2148,10 @@ class NodeRepository:
                     ni.long_name,
                     ni.short_name,
                     ni.hw_model,
-                    printf('!%08x', ni.node_id) as hex_id,
+                    ('!' || lpad(to_hex(ni.node_id), 8, '0')) as hex_id,
                     ni.role,
                     ni.primary_channel,
-                    datetime(COALESCE(stats.last_packet, ni.last_updated), 'unixepoch') as last_packet_str,
+                    to_timestamp(COALESCE(stats.last_packet, ni.last_updated)) as last_packet_str,
                     COALESCE(stats.packet_count_24h, 0) as packet_count_24h,
                     COALESCE(stats.gateway_count, 0) as gateway_count_24h
                 FROM node_info ni
@@ -2149,16 +2162,17 @@ class NodeRepository:
                         MAX(timestamp) as last_packet,
                         COUNT(DISTINCT gateway_id) as gateway_count
                     FROM packet_history
-                    WHERE timestamp >= (strftime('%s', 'now') - 86400)
-                      AND from_node_id = ?
+                    WHERE timestamp >= (EXTRACT(EPOCH FROM NOW()) - 86400)
+                      AND from_node_id = %s
                     GROUP BY from_node_id
                 ) stats ON ni.node_id = stats.node_id
-                WHERE ni.node_id = ?
+                WHERE ni.node_id = %s
             """
 
             cursor.execute(query, (node_id, node_id))
             node_row = cursor.fetchone()
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
 
             if not node_row:
                 return None
@@ -2177,10 +2191,10 @@ class NodeRepository:
 
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Use placeholders for the IN clause
-            placeholders = ",".join(["?"] * len(node_ids))
+            placeholders = ",".join(["%s"] * len(node_ids))
             query = f"""
                 SELECT node_id, long_name, short_name
                 FROM node_info
@@ -2203,7 +2217,8 @@ class NodeRepository:
                 if node_id not in result:
                     result[node_id] = f"!{node_id:08x}"
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
             return result
 
         except Exception as e:
@@ -2215,14 +2230,14 @@ class NodeRepository:
         """Get list of nodes that have sent packets."""
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             query = """
                 SELECT
                     ph.from_node_id as node_id,
-                    ni.long_name,
-                    ni.short_name,
-                    printf('!%08x', ph.from_node_id) as hex_id,
+                    MAX(ni.long_name) as long_name,
+                    MAX(ni.short_name) as short_name,
+                    ('!' || lpad(to_hex(ph.from_node_id), 8, '0')) as hex_id,
                     COUNT(*) as packet_count
                 FROM packet_history ph
                 LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
@@ -2234,7 +2249,8 @@ class NodeRepository:
             cursor.execute(query)
             nodes = [dict(row) for row in cursor.fetchall()]
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
             return nodes
 
         except Exception as e:
@@ -2257,7 +2273,7 @@ class NodeRepository:
         """
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # The gateway_id field in packet_history stores the node hex ID prefixed with '!'.
             gateway_hex_id = f"!{gateway_node_id:08x}"
@@ -2279,9 +2295,9 @@ class NodeRepository:
                     MAX(p.timestamp) as last_seen
                 FROM packet_history p
                 LEFT JOIN node_info ni ON ni.node_id = p.from_node_id
-                WHERE p.gateway_id = ?
+                WHERE p.gateway_id = %s
                   AND p.from_node_id IS NOT NULL
-                  AND p.from_node_id != ?
+                  AND p.from_node_id != %s
                   AND p.hop_start IS NOT NULL
                   AND p.hop_limit IS NOT NULL
                   AND (p.hop_start - p.hop_limit) = 0
@@ -2301,9 +2317,9 @@ class NodeRepository:
                     p.rssi,
                     p.snr
                 FROM packet_history p
-                WHERE p.gateway_id = ?
+                WHERE p.gateway_id = %s
                   AND p.from_node_id IS NOT NULL
-                  AND p.from_node_id != ?
+                  AND p.from_node_id != %s
                   AND p.hop_start IS NOT NULL
                   AND p.hop_limit IS NOT NULL
                   AND (p.hop_start - p.hop_limit) = 0
@@ -2312,7 +2328,8 @@ class NodeRepository:
 
             cursor.execute(packets_query, (gateway_hex_id, gateway_node_id))
             packet_rows = cursor.fetchall()
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
 
             # Build result with both stats and packet data
             result: list[dict[str, Any]] = []
@@ -2389,7 +2406,7 @@ class NodeRepository:
         """
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Initialize variables
             stats_rows = []
@@ -2417,15 +2434,15 @@ class NodeRepository:
                         MAX(p.timestamp) as last_seen
                     FROM packet_history p
                     LEFT JOIN node_info ni ON ni.node_id = p.from_node_id
-                    WHERE p.gateway_id = ?
+                    WHERE p.gateway_id = %s
                       AND p.from_node_id IS NOT NULL
-                      AND p.from_node_id != ?
+                      AND p.from_node_id != %s
                       AND p.hop_start IS NOT NULL
                       AND p.hop_limit IS NOT NULL
                       AND (p.hop_start - p.hop_limit) = 0
                     GROUP BY p.from_node_id, ni.long_name, ni.short_name
                     ORDER BY packet_count DESC
-                    LIMIT ?
+                    LIMIT %s
                 """
 
                 # Then get individual packet data for chart plotting
@@ -2437,9 +2454,9 @@ class NodeRepository:
                         p.rssi,
                         p.snr
                     FROM packet_history p
-                    WHERE p.gateway_id = ?
+                    WHERE p.gateway_id = %s
                       AND p.from_node_id IS NOT NULL
-                      AND p.from_node_id != ?
+                      AND p.from_node_id != %s
                       AND p.hop_start IS NOT NULL
                       AND p.hop_limit IS NOT NULL
                       AND (p.hop_start - p.hop_limit) = 0
@@ -2520,15 +2537,15 @@ class NodeRepository:
                         MIN(p.timestamp) as first_seen,
                         MAX(p.timestamp) as last_seen
                     FROM packet_history p
-                    WHERE p.from_node_id = ?
+                    WHERE p.from_node_id = %s
                       AND p.gateway_id IS NOT NULL
-                      AND p.gateway_id != ?
+                      AND p.gateway_id != %s
                       AND p.hop_start IS NOT NULL
                       AND p.hop_limit IS NOT NULL
                       AND (p.hop_start - p.hop_limit) = 0
                     GROUP BY p.gateway_id
                     ORDER BY packet_count DESC
-                    LIMIT ?
+                    LIMIT %s
                 """
 
                 # Then get individual packet data for chart plotting
@@ -2540,9 +2557,9 @@ class NodeRepository:
                         p.rssi,
                         p.snr
                     FROM packet_history p
-                    WHERE p.from_node_id = ?
+                    WHERE p.from_node_id = %s
                       AND p.gateway_id IS NOT NULL
-                      AND p.gateway_id != ?
+                      AND p.gateway_id != %s
                       AND p.hop_start IS NOT NULL
                       AND p.hop_limit IS NOT NULL
                       AND (p.hop_start - p.hop_limit) = 0
@@ -2642,7 +2659,8 @@ class NodeRepository:
                     f"Invalid direction: {direction}. Must be 'received' or 'transmitted'."
                 )
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
             return result
 
         except Exception as e:
@@ -2656,12 +2674,13 @@ class NodeRepository:
         """Return list of unique primary channel names."""
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute(
                 "SELECT DISTINCT primary_channel FROM node_info WHERE primary_channel IS NOT NULL AND primary_channel != '' ORDER BY primary_channel"
             )
             rows = cursor.fetchall()
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
             return [row[0] for row in rows]
         except Exception as e:
             logger.error(f"Error getting unique primary channels: {e}")
@@ -2687,39 +2706,39 @@ class TracerouteRepository:
 
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Build WHERE clause
             where_conditions = ["portnum_name = 'TRACEROUTE_APP'"]
             params = []
 
             if filters.get("start_time"):
-                where_conditions.append("timestamp >= ?")
+                where_conditions.append("timestamp >= %s")
                 params.append(filters["start_time"])
 
             if filters.get("end_time"):
-                where_conditions.append("timestamp <= ?")
+                where_conditions.append("timestamp <= %s")
                 params.append(filters["end_time"])
 
             if filters.get("from_node"):
-                where_conditions.append("from_node_id = ?")
+                where_conditions.append("from_node_id = %s")
                 params.append(filters["from_node"])
 
             if filters.get("to_node"):
-                where_conditions.append("to_node_id = ?")
+                where_conditions.append("to_node_id = %s")
                 params.append(filters["to_node"])
 
             if filters.get("gateway_id"):
-                where_conditions.append("gateway_id = ?")
+                where_conditions.append("gateway_id = %s")
                 params.append(filters["gateway_id"])
 
             # New: Optional filtering by primary_channel (matches packet.channel_id field)
             if filters.get("primary_channel"):
-                where_conditions.append("channel_id = ?")
+                where_conditions.append("channel_id = %s")
                 params.append(filters["primary_channel"])
 
             if filters.get("processed_successfully_only"):
-                where_conditions.append("processed_successfully = 1")
+                where_conditions.append("processed_successfully = TRUE")
 
             # Check if route_node filtering is needed
             route_node_filter = filters.get("route_node")
@@ -2728,9 +2747,9 @@ class TracerouteRepository:
             # Add search functionality
             if search:
                 search_conditions = [
-                    "gateway_id LIKE ?",
-                    "CAST(from_node_id AS TEXT) LIKE ?",
-                    "CAST(to_node_id AS TEXT) LIKE ?",
+                    "gateway_id LIKE %s",
+                    "CAST(from_node_id AS TEXT) LIKE %s",
+                    "CAST(to_node_id AS TEXT) LIKE %s",
                 ]
                 search_param = f"%{search}%"
                 where_conditions.append(f"({' OR '.join(search_conditions)})")
@@ -2748,7 +2767,7 @@ class TracerouteRepository:
 
                     current_time = time.time()
                     window_start = current_time - (time_window_days * 24 * 3600)
-                    where_conditions.append("timestamp >= ?")
+                    where_conditions.append("timestamp >= %s")
                     params.append(window_start)
 
                 # Add mesh_packet_id filter and exclude special cases
@@ -2786,11 +2805,11 @@ class TracerouteRepository:
                         id, timestamp, from_node_id, to_node_id, gateway_id,
                         hop_start, hop_limit, rssi, snr, payload_length, raw_payload,
                         processed_successfully, mesh_packet_id,
-                        datetime(timestamp, 'unixepoch') as timestamp_str
+                        to_timestamp(timestamp) as timestamp_str
                     FROM packet_history
                     {where_clause}
                     ORDER BY timestamp DESC
-                    LIMIT ?
+                    LIMIT %s
                 """
 
                 cursor.execute(query, params + [fetch_limit])
@@ -3105,12 +3124,12 @@ class TracerouteRepository:
                         id, timestamp, from_node_id, to_node_id, gateway_id,
                         hop_start, hop_limit, rssi, snr, payload_length, raw_payload,
                         processed_successfully, mesh_packet_id,
-                        datetime(timestamp, 'unixepoch') as timestamp_str,
+                        to_timestamp(timestamp) as timestamp_str,
                         (hop_start - hop_limit) AS hop_count
                     FROM packet_history
                     {where_clause}
                     ORDER BY {order_by} {order_dir_sql}
-                    LIMIT ? OFFSET ?
+                    LIMIT %s OFFSET %s
                 """
 
                 cursor.execute(query, params + [fetch_limit, fetch_offset])
@@ -3192,7 +3211,8 @@ class TracerouteRepository:
                     packets = all_packets
                     total_count = total_count_before_filter
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
 
             return {
                 "packets": packets,
@@ -3211,22 +3231,23 @@ class TracerouteRepository:
         """Get details for a specific traceroute packet."""
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             query = """
                 SELECT
                     id, timestamp, from_node_id, to_node_id, gateway_id,
                     hop_start, hop_limit, rssi, snr, payload_length, raw_payload,
                     processed_successfully,
-                    datetime(timestamp, 'unixepoch') as timestamp_str
+                    to_timestamp(timestamp) as timestamp_str
                 FROM packet_history
-                WHERE id = ? AND portnum_name = 'TRACEROUTE_APP'
+                WHERE id = %s AND portnum_name = 'TRACEROUTE_APP'
             """
 
             cursor.execute(query, (packet_id,))
             result = cursor.fetchone()
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
 
             return dict(result) if result else None
 
@@ -3254,7 +3275,7 @@ class LocationRepository:
 
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             node_ids_filter = filters.get("node_ids") if filters else None
             node_ids_clause = ""
@@ -3279,7 +3300,7 @@ class LocationRepository:
                     else:
                         node_ids_int.append(int(nid))
                 if node_ids_int:
-                    placeholders = ",".join(["?"] * len(node_ids_int))
+                    placeholders = ",".join(["%s"] * len(node_ids_int))
                     node_ids_clause = f"AND from_node_id IN ({placeholders})"
                     node_ids_params = node_ids_int
 
@@ -3290,7 +3311,7 @@ class LocationRepository:
                         from_node_id,
                         MAX(timestamp) as max_timestamp
                     FROM packet_history
-                    WHERE portnum = 3  -- POSITION_APP
+                    WHERE portnum IN (3, 73)  -- POSITION_APP and MAP_REPORT_APP
                     AND raw_payload IS NOT NULL
                     AND from_node_id IS NOT NULL
                     {node_ids_clause}
@@ -3305,12 +3326,12 @@ class LocationRepository:
                     ni.hw_model,
                     ni.role,
                     ni.primary_channel,
-                    printf('!%08x', ph.from_node_id) as hex_id
+                    ('!' || lpad(to_hex(ph.from_node_id), 8, '0')) as hex_id
                 FROM packet_history ph
                 INNER JOIN max_timestamps mt ON ph.from_node_id = mt.from_node_id
                     AND ph.timestamp = mt.max_timestamp
                 LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
-                WHERE ph.portnum = 3
+                WHERE ph.portnum IN (3, 73)
                 AND ph.raw_payload IS NOT NULL
                 ORDER BY ph.timestamp DESC
             """
@@ -3320,7 +3341,7 @@ class LocationRepository:
                 cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_packet_history_position_lookup
                     ON packet_history(portnum, from_node_id, timestamp DESC)
-                    WHERE portnum = 3 AND raw_payload IS NOT NULL
+                    WHERE portnum IN (3, 73) AND raw_payload IS NOT NULL
                 """)
             except Exception as e:
                 logger.debug(f"Index creation skipped or failed: {e}")
@@ -3461,7 +3482,8 @@ class LocationRepository:
             timing_breakdown["decode_and_process"] = time.time() - decode_start
             timing_breakdown["new_decodes"] = decode_count
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
 
             total_time = time.time() - start_time
             timing_breakdown["total"] = total_time
@@ -3496,7 +3518,7 @@ class LocationRepository:
         """Get location history for a specific node from position packets."""
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Handle different node ID formats
             if isinstance(node_id, str):
@@ -3511,13 +3533,13 @@ class LocationRepository:
                 SELECT
                     timestamp,
                     raw_payload,
-                    datetime(timestamp, 'unixepoch') as timestamp_str
+                    to_timestamp(timestamp) as timestamp_str
                 FROM packet_history
-                WHERE from_node_id = ?
+                WHERE from_node_id = %s
                 AND portnum = 3  -- POSITION_APP
                 AND raw_payload IS NOT NULL
                 ORDER BY timestamp DESC
-                LIMIT ?
+                LIMIT %s
             """
 
             cursor.execute(query, (node_id, limit))
@@ -3560,7 +3582,8 @@ class LocationRepository:
                     )
                     continue
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
             return locations
 
         except Exception as e:
@@ -3577,7 +3600,7 @@ class LocationRepository:
         """
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Handle different node ID formats (hex string beginning with !, plain hex, or int)
             if isinstance(node_id, str):
@@ -3595,8 +3618,8 @@ class LocationRepository:
                 """
                 SELECT timestamp, raw_payload
                 FROM packet_history
-                WHERE from_node_id = ?
-                  AND portnum = 3            -- POSITION_APP
+                WHERE from_node_id = %s
+                  AND portnum IN (3, 73)  -- POSITION_APP and MAP_REPORT_APP
                   AND raw_payload IS NOT NULL
                 ORDER BY timestamp DESC
                 LIMIT 1
@@ -3606,7 +3629,8 @@ class LocationRepository:
             row = cursor.fetchone()
 
             if not row:
-                conn.close()
+                cursor.close()
+                put_db_connection(conn)
                 return None
 
             # Decode protobuf – this is the same logic used elsewhere but for a single row
@@ -3619,7 +3643,8 @@ class LocationRepository:
                 altitude = position.altitude if position.altitude else None
 
                 if not latitude or not longitude or latitude == 0 or longitude == 0:
-                    conn.close()
+                    cursor.close()
+                    put_db_connection(conn)
                     return None
 
                 result = {
@@ -3628,13 +3653,15 @@ class LocationRepository:
                     "altitude": altitude,
                     "timestamp": row["timestamp"],
                 }
-                conn.close()
+                cursor.close()
+                put_db_connection(conn)
                 return result
             except Exception as e:
                 logger.warning(
                     f"Failed to decode position payload for node {node_id}: {e}"
                 )
-                conn.close()
+                cursor.close()
+                put_db_connection(conn)
                 return None
         except Exception as e:
             logger.error(f"Error getting latest location for node {node_id}: {e}")
@@ -3647,15 +3674,15 @@ class LocationRepository:
         """Get the most appropriate location for a node at a specific timestamp."""
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # First try to get the most recent location before or at the target timestamp
             query_before = """
                 SELECT timestamp, raw_payload
                 FROM packet_history
-                WHERE from_node_id = ?
+                WHERE from_node_id = %s
                 AND portnum = 3  -- POSITION_APP
-                AND timestamp <= ?
+                AND timestamp <= %s
                 AND raw_payload IS NOT NULL
                 ORDER BY timestamp DESC
                 LIMIT 1
@@ -3704,9 +3731,9 @@ class LocationRepository:
             query_after = """
                 SELECT timestamp, raw_payload
                 FROM packet_history
-                WHERE from_node_id = ?
+                WHERE from_node_id = %s
                 AND portnum = 3  -- POSITION_APP
-                AND timestamp > ?
+                AND timestamp > %s
                 AND raw_payload IS NOT NULL
                 ORDER BY timestamp ASC
                 LIMIT 1
@@ -3751,7 +3778,8 @@ class LocationRepository:
                 except Exception as e:
                     logger.warning(f"Failed to decode position from raw payload: {e}")
 
-            conn.close()
+            cursor.close()
+            put_db_connection(conn)
             return None
 
         except Exception as e:

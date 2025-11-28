@@ -21,10 +21,13 @@
                         <button type="button" class="btn btn-outline-secondary" onclick="resetCombinedGraphZoom()">
                             <i class="bi bi-zoom-out"></i> Reset
                         </button>
+                        <button type="button" class="btn btn-outline-secondary" onclick="toggleReducedMotion()" title="Toggle reduced motion">
+                            <i class="bi bi-magic"></i>
+                        </button>
                     </div>
                 </div>
             </div>
-                        <div class="row mt-2">
+            <div class="row mt-2">
                 <div class="col-lg-9 col-md-8 col-12">
                     <div id="combined-traceroute-graph" class="traceroute-graph-container">
                         <div class="text-center" id="combined-graph-loader">
@@ -32,6 +35,12 @@
                                 <span class="visually-hidden">Loading graph...</span>
                             </div>
                             <p class="mt-2 text-muted">Building graph...</p>
+                            <p class="text-muted small">This can take a few seconds on large graphs.</p>
+                        </div>
+                        <div id="combined-graph-skeleton" class="graph-skeleton d-none">
+                            <div class="skeleton-line w-75"></div>
+                            <div class="skeleton-line w-50"></div>
+                            <div class="skeleton-line w-25"></div>
                         </div>
                     </div>
                 </div>
@@ -84,6 +93,51 @@
                                 <h6 class="text-muted mb-2" style="font-size: 0.85rem;">Packet Paths</h6>
                                 <div id="legend-paths-container">
                                     <small class="text-muted">Loading paths...</small>
+                                </div>
+                                <div class="mt-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="toggle-direct-only">
+                                        <label class="form-check-label small" for="toggle-direct-only">Only direct (0 hop)</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="toggle-multihop-only">
+                                        <label class="form-check-label small" for="toggle-multihop-only">Only multi-hop</label>
+                                    </div>
+                                </div>
+                                <div class="mt-3">
+                                    <label class="form-label small mb-1" for="gateway-filter-select">Gateway overlay</label>
+                                    <select class="form-select form-select-sm mb-2" id="gateway-filter-select">
+                                        <option value="">All gateways</option>
+                                    </select>
+                                    <div class="d-flex gap-2">
+                                        <button class="btn btn-outline-secondary btn-sm w-100" id="btn-isolate-gateway">
+                                            <i class="bi bi-broadcast-pin"></i> Solo gateway
+                                        </button>
+                                        <button class="btn btn-outline-secondary btn-sm w-100" id="btn-clear-gateway">
+                                            <i class="bi bi-x-circle"></i> Clear
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="mt-3">
+                                    <label class="form-label small mb-1" for="route-playback-speed">Route playback speed</label>
+                                    <input type="range" class="form-range" min="100" max="1200" step="50" id="route-playback-speed" value="500">
+                                    <div class="d-flex justify-content-between small text-muted">
+                                        <span>Fast</span><span>Slow</span>
+                                    </div>
+                                    <button class="btn btn-sm btn-primary w-100 mt-1" id="btn-play-route">
+                                        <i class="bi bi-play-fill"></i> Play selected route
+                                    </button>
+                                </div>
+                                <div class="mt-3">
+                                    <label class="form-label small mb-1" for="save-layout-name">Saved layouts</label>
+                                    <div class="input-group input-group-sm mb-2">
+                                        <input type="text" class="form-control" id="save-layout-name" placeholder="Layout name">
+                                        <button class="btn btn-outline-secondary" id="btn-save-layout"><i class="bi bi-save"></i></button>
+                                    </div>
+                                    <div class="d-flex gap-2">
+                                        <select class="form-select form-select-sm" id="saved-layouts"></select>
+                                        <button class="btn btn-outline-secondary btn-sm" id="btn-load-layout"><i class="bi bi-box-arrow-in-right"></i></button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -148,6 +202,56 @@
     border-left-color: var(--path-color, #007bff);
 }
 
+.graph-skeleton {
+    padding: 12px;
+}
+.skeleton-line {
+    height: 10px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--bs-secondary-bg) 25%, var(--bs-border-color) 50%, var(--bs-secondary-bg) 75%);
+    background-size: 200% 100%;
+    animation: skeleton-loading 1.2s ease-in-out infinite;
+    margin-bottom: 6px;
+}
+.skeleton-line.w-75 { width: 75%; }
+.skeleton-line.w-50 { width: 50%; }
+.skeleton-line.w-25 { width: 25%; }
+
+@keyframes skeleton-loading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.node-pulse {
+    animation: pulse 0.8s ease-in-out infinite;
+}
+@keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(13,110,253,0.4); }
+    70% { box-shadow: 0 0 0 12px rgba(13,110,253,0); }
+    100% { box-shadow: 0 0 0 0 rgba(13,110,253,0); }
+}
+
+.toast-container {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    z-index: 1050;
+}
+.toast-item {
+    background: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    border: 1px solid var(--bs-border-color);
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-top: 6px;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.12);
+    font-size: 0.9rem;
+}
+
+.node-pinned {
+    stroke: var(--bs-dark);
+    stroke-width: 4 !important;
+}
 .legend-path-color {
     width: 16px;
     height: 3px;
@@ -385,6 +489,9 @@ let combinedGraphSimulation = null;
 let combinedGraphSvg = null;
 let combinedGraphG = null;
 let pathElements = [];
+let filteredPaths = [];
+let reducedMotion = false;
+const layoutStorageKey = "malla-traceroute-layouts";
 
 function loadCombinedTracerouteGraph() {
     const container = document.getElementById('combined-traceroute-graph');
@@ -480,8 +587,10 @@ function loadCombinedTracerouteGraph() {
     const nodes = window.packetGraphData.nodes.map(d => ({
         ...d,
         size: d.type === 'gateway' ? 16 : 12,
-        connections: d.connections || 0
+        connections: d.connections || 0,
+        pinned: false
     }));
+    window.combinedGraphNodes = nodes;
 
     const links = window.packetGraphData.edges.map(d => ({
         source: d.from,
@@ -498,6 +607,8 @@ function loadCombinedTracerouteGraph() {
     }));
 
     const paths = window.packetGraphData.paths || [];
+    filteredPaths = [...paths];
+    const gatewayOptions = Array.from(new Set(paths.map(p => p.gateway_node_id).filter(Boolean)));
 
     // Create gateway connections
     const gatewayConnections = [];
@@ -580,6 +691,7 @@ function loadCombinedTracerouteGraph() {
 
     // Create path lines (behind everything else)
     const pathGroup = g.append('g').attr('class', 'paths');
+    window.combinedGraphPathGroup = pathGroup;
 
     // Create links
     const link = g.append('g')
@@ -683,6 +795,7 @@ function loadCombinedTracerouteGraph() {
                 showLinkDetails(sourceNode, targetNode, d);
             }
         });
+    window.combinedGraphLink = link;
 
     // Create link labels
     const linkLabel = g.append('g')
@@ -712,6 +825,23 @@ function loadCombinedTracerouteGraph() {
             .on('start', dragstarted)
             .on('drag', dragged)
             .on('end', dragended));
+    nodeGroup.on('dblclick', (event, d) => {
+        d.pinned = !d.pinned;
+        if (d.pinned) {
+            d.fx = d.x;
+            d.fy = d.y;
+            showToast(`Pinned ${d.label || d.id}`);
+        } else {
+            d.fx = null;
+            d.fy = null;
+            showToast(`Unpinned ${d.label || d.id}`);
+        }
+        window.combinedGraphNodeGroup?.selectAll('.node-circle')
+            .filter(n => n.id === d.id)
+            .classed('node-pinned', d.pinned);
+        simulation.alpha(0.3).restart();
+    });
+    window.combinedGraphNodeGroup = nodeGroup;
 
     // Add circles for nodes
     const nodeCircle = nodeGroup.append('circle')
@@ -857,7 +987,7 @@ function loadCombinedTracerouteGraph() {
     function updatePathLines() {
         // Draw distinct paths for each packet with different styles
         const pathLines = pathGroup.selectAll('.path-line')
-            .data(paths);
+            .data(filteredPaths, d => d.packet_id);
 
         pathLines.enter()
             .append('path')
@@ -884,7 +1014,7 @@ function loadCombinedTracerouteGraph() {
                     const curr = pathNodes[i];
 
                     // Add curve with offset based on path index to separate overlapping paths
-                    const pathIndex = paths.findIndex(p => p.packet_id === d.packet_id);
+                    const pathIndex = filteredPaths.findIndex(p => p.packet_id === d.packet_id);
                     const offset = (pathIndex % 5 - 2) * 15; // Spread paths out
 
                     const midX = (prev.x + curr.x) / 2;
@@ -898,6 +1028,7 @@ function loadCombinedTracerouteGraph() {
 
         pathLines.exit().remove();
     }
+    window._updateTraceroutePaths = updatePathLines;
 
     // Drag functions
     function dragstarted(event, d) {
@@ -913,12 +1044,16 @@ function loadCombinedTracerouteGraph() {
 
     function dragended(event, d) {
         if (!event.active) simulation.alphaTarget(0);
-        d.fx = null;
-        d.fy = null;
+        if (!d.pinned) {
+            d.fx = null;
+            d.fy = null;
+        }
     }
 
     // Populate legend paths
-    populateLegendPaths(paths, nodes);
+    populateLegendPaths(filteredPaths, nodes);
+    populateGatewaySelect(gatewayOptions, nodes);
+    wireGraphControls(paths, nodes, simulation);
 }
 
 // Global function to highlight a specific path
@@ -1019,6 +1154,10 @@ function populateLegendPaths(paths, nodes) {
             if (!isHighlighted) {
                 pathItem.classList.add('highlighted');
                 highlightPath(path, true);
+                lastSelectedPath = path;
+            } else {
+                lastSelectedPath = null;
+                highlightPath(path, false);
             }
         });
 
@@ -1104,6 +1243,181 @@ function showLinkDetails(sourceNode, targetNode, linkData) {
 
     backdrop.appendChild(modal);
     document.body.appendChild(backdrop);
+}
+
+function populateGatewaySelect(gatewayIds, nodes) {
+    const select = document.getElementById('gateway-filter-select');
+    if (!select) return;
+    gatewayIds
+        .map(id => ({ id, label: nodes.find(n => n.id === id)?.label || `!${id.toString(16)}` }))
+        .forEach(gw => {
+            const opt = document.createElement('option');
+            opt.value = gw.id;
+            opt.textContent = gw.label;
+            select.appendChild(opt);
+        });
+}
+
+function applyPathFilters(allPaths) {
+    const directOnly = document.getElementById('toggle-direct-only')?.checked;
+    const multihopOnly = document.getElementById('toggle-multihop-only')?.checked;
+    const gatewayValue = document.getElementById('gateway-filter-select')?.value;
+
+    filteredPaths = allPaths.filter(p => {
+        if (directOnly && p.hop_count !== 0) return false;
+        if (multihopOnly && p.hop_count === 0) return false;
+        if (gatewayValue && p.gateway_node_id?.toString() !== gatewayValue) return false;
+        return true;
+    });
+
+    if (window.combinedGraphPathGroup) {
+        window.combinedGraphPathGroup.selectAll('.path-line').remove();
+    }
+    if (window._updateTraceroutePaths) window._updateTraceroutePaths();
+    populateLegendPaths(filteredPaths, window.combinedGraphNodes || []);
+}
+
+let lastSelectedPath = null;
+
+function wireGraphControls(allPaths, nodes, simulation) {
+    const directToggle = document.getElementById('toggle-direct-only');
+    const multihopToggle = document.getElementById('toggle-multihop-only');
+    const gatewaySelect = document.getElementById('gateway-filter-select');
+    const playbackButton = document.getElementById('btn-play-route');
+    const isoButton = document.getElementById('btn-isolate-gateway');
+    const clearGw = document.getElementById('btn-clear-gateway');
+    const saveBtn = document.getElementById('btn-save-layout');
+    const loadBtn = document.getElementById('btn-load-layout');
+
+    [directToggle, multihopToggle, gatewaySelect].forEach(ctrl => {
+        if (!ctrl) return;
+        ctrl.addEventListener('change', () => applyPathFilters(allPaths));
+    });
+
+    if (playbackButton) {
+        playbackButton.addEventListener('click', () => {
+            if (!lastSelectedPath) {
+                showToast('Select a path in the legend to play it.');
+                return;
+            }
+            playPath(lastSelectedPath, nodes);
+        });
+    }
+
+    if (isoButton) {
+        isoButton.addEventListener('click', () => {
+            const val = gatewaySelect?.value;
+            if (!val) {
+                showToast('Pick a gateway to solo.');
+                return;
+            }
+            applyPathFilters(allPaths);
+            showToast(`Showing paths heard by gateway ${val}`);
+        });
+    }
+    if (clearGw) {
+        clearGw.addEventListener('click', () => {
+            if (gatewaySelect) gatewaySelect.value = '';
+            applyPathFilters(allPaths);
+        });
+    }
+
+    if (saveBtn) {
+        saveBtn.addEventListener('click', () => {
+            const name = document.getElementById('save-layout-name')?.value?.trim();
+            if (!name) return showToast('Name your layout first.');
+            const layout = nodes.map(n => ({ id: n.id, x: n.x, y: n.y, pinned: !!n.pinned }));
+            const existing = JSON.parse(localStorage.getItem(layoutStorageKey) || '{}');
+            existing[name] = layout;
+            localStorage.setItem(layoutStorageKey, JSON.stringify(existing));
+            loadSavedLayouts();
+            showToast(`Saved layout "${name}"`);
+        });
+    }
+    if (loadBtn) {
+        loadBtn.addEventListener('click', () => {
+            const select = document.getElementById('saved-layouts');
+            const key = select?.value;
+            if (!key) return;
+            const layouts = JSON.parse(localStorage.getItem(layoutStorageKey) || '{}');
+            const layout = layouts[key];
+            if (!layout) return;
+            nodes.forEach(n => {
+                const found = layout.find(l => l.id === n.id);
+                if (found) {
+                    n.x = found.x; n.y = found.y;
+                    n.fx = found.pinned ? found.x : null;
+                    n.fy = found.pinned ? found.y : null;
+                    n.pinned = found.pinned;
+                }
+            });
+            if (simulation) simulation.alpha(0.6).restart();
+            showToast(`Loaded layout "${key}"`);
+        });
+    }
+
+    loadSavedLayouts();
+}
+
+function loadSavedLayouts() {
+    const select = document.getElementById('saved-layouts');
+    if (!select) return;
+    select.innerHTML = '';
+    const layouts = JSON.parse(localStorage.getItem(layoutStorageKey) || '{}');
+    Object.keys(layouts).forEach(key => {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = key;
+        select.appendChild(opt);
+    });
+}
+
+function playPath(path, nodes) {
+    if (!path || !nodes) return;
+    highlightPath(path, true);
+    const speed = Number(document.getElementById('route-playback-speed')?.value || 500);
+    const nodeSeq = path.nodes.map(id => nodes.find(n => n.id === id)).filter(Boolean);
+    let idx = 0;
+
+    const cleanup = () => {
+        window.combinedGraphNodeGroup?.selectAll('.node-circle').classed('node-pulse', false);
+        highlightPath(path, false);
+    };
+
+    const step = () => {
+        if (idx >= nodeSeq.length || reducedMotion) {
+            cleanup();
+            return;
+        }
+        const nodeId = nodeSeq[idx].id;
+        window.combinedGraphNodeGroup?.selectAll('.node-circle')
+            .filter(d => d.id === nodeId)
+            .classed('node-pulse', true);
+        idx += 1;
+        setTimeout(step, speed);
+    };
+
+    step();
+    setTimeout(cleanup, speed * (nodeSeq.length + 1));
+}
+
+function showToast(message) {
+    let container = document.querySelector('.toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.className = 'toast-container';
+        document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = 'toast-item';
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 3200);
+}
+
+function toggleReducedMotion() {
+    reducedMotion = !reducedMotion;
+    showToast(reducedMotion ? 'Reduced motion enabled' : 'Animations enabled');
 }
 
 // Utility functions for external control
