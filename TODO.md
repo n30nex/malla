@@ -11,10 +11,10 @@
 - **Data retention**: Configurable cleanup with interval control in `mqtt_capture.py` (`cleanup_old_data()`, `cleanup_worker()`). ✅
 - **Node/gateway caching**: Background cleanup thread in `utils/node_utils.py` (`start_cache_cleanup()`, `_cache_cleanup_worker()`). ✅
 - **Docker setup**: Dockerfile and docker-compose.yml working correctly (recently fixed). ✅
+- **Test dependency**: `[dev]` extra is canonical (confirmed: `run_tests.py` line 33 uses `[dev]`, not `[test]`). ✅
 
 ## Critical
 
-- **Test dependency**: `[dev]` extra is canonical (confirmed: `run_tests.py` line 33 uses `[dev]`, not `[test]`). ✅
 - **SQLite test migration**: Tests still use SQLite fixtures (`tests/integration/test_data_cleanup.py` imports `sqlite3`). **CRITICAL**: Migrate to PostgreSQL fixtures before removing SQLite support entirely.
 
 ## High Priority

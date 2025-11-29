@@ -13,7 +13,7 @@ Features:
 - Automatic data cleanup based on retention settings
 
 Usage:
-    python mqtt_to_sqlite.py
+    malla-capture
 
 Configuration:
     All runtime settings are loaded from ``config.yaml`` (or the file specified
@@ -140,22 +140,89 @@ ingest_stats = {
 }
 
 # Prometheus metrics (counters accumulate; optional HTTP exporter)
-PACKETS_RECEIVED = Counter("malla_packets_received_total", "MQTT messages received")
-PACKETS_PARSED = Counter("malla_packets_parsed_total", "Packets parsed successfully")
-PACKETS_PARSE_FAILED = Counter("malla_packets_parse_failed_total", "Packets that failed to parse")
-PACKETS_DECRYPT_SUCCESS = Counter("malla_packets_decrypt_success_total", "Packets decrypted successfully")
-PACKETS_DECRYPT_FAILED = Counter("malla_packets_decrypt_failed_total", "Packets failed to decrypt")
-ACTIVE_THREADS = Gauge("malla_active_threads", "Active threads in capture process")
-DB_QUERY_DURATION = Histogram(
-    "malla_db_query_seconds",
-    "Database operation duration in seconds",
-    ["operation"],
-)
-PACKET_PROCESS_DURATION = Histogram(
-    "malla_packet_process_seconds",
-    "End-to-end MQTT packet processing duration in seconds",
-    ["stage"],
-)
+# Use try/except to handle duplicate registration during module reloads
+try:
+    PACKETS_RECEIVED = Counter("malla_packets_received_total", "MQTT messages received")
+except ValueError:
+    from prometheus_client import REGISTRY
+    PACKETS_RECEIVED = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_packets_received_total"), None)
+    if PACKETS_RECEIVED is None:
+        raise
+
+try:
+    PACKETS_PARSED = Counter("malla_packets_parsed_total", "Packets parsed successfully")
+except ValueError:
+    from prometheus_client import REGISTRY
+    PACKETS_PARSED = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_packets_parsed_total"), None)
+    if PACKETS_PARSED is None:
+        raise
+
+try:
+    PACKETS_PARSE_FAILED = Counter("malla_packets_parse_failed_total", "Packets that failed to parse")
+except ValueError:
+    from prometheus_client import REGISTRY
+    PACKETS_PARSE_FAILED = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_packets_parse_failed_total"), None)
+    if PACKETS_PARSE_FAILED is None:
+        raise
+
+try:
+    PACKETS_DECRYPT_SUCCESS = Counter("malla_packets_decrypt_success_total", "Packets decrypted successfully")
+except ValueError:
+    from prometheus_client import REGISTRY
+    PACKETS_DECRYPT_SUCCESS = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_packets_decrypt_success_total"), None)
+    if PACKETS_DECRYPT_SUCCESS is None:
+        raise
+
+try:
+    PACKETS_DECRYPT_FAILED = Counter("malla_packets_decrypt_failed_total", "Packets failed to decrypt")
+except ValueError:
+    from prometheus_client import REGISTRY
+    PACKETS_DECRYPT_FAILED = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_packets_decrypt_failed_total"), None)
+    if PACKETS_DECRYPT_FAILED is None:
+        raise
+
+try:
+    ACTIVE_THREADS = Gauge("malla_active_threads", "Active threads in capture process")
+except ValueError:
+    from prometheus_client import REGISTRY
+    ACTIVE_THREADS = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_active_threads"), None)
+    if ACTIVE_THREADS is None:
+        raise
+
+try:
+    DB_QUERY_DURATION = Histogram(
+        "malla_capture_db_query_seconds",
+        "Database operation duration in seconds (capture service)",
+        ["operation"],
+    )
+except ValueError:
+    from prometheus_client import REGISTRY
+    DB_QUERY_DURATION = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_capture_db_query_seconds"), None)
+    if DB_QUERY_DURATION is None:
+        raise
+
+try:
+    PACKET_PROCESS_DURATION = Histogram(
+        "malla_packet_process_seconds",
+        "End-to-end MQTT packet processing duration in seconds",
+        ["stage"],
+    )
+except ValueError:
+    from prometheus_client import REGISTRY
+    PACKET_PROCESS_DURATION = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_packet_process_seconds"), None)
+    if PACKET_PROCESS_DURATION is None:
+        raise
+
+try:
+    CLEANUP_FAILURES = Counter(
+        "malla_data_cleanup_failures_total",
+        "Total number of data cleanup failures",
+    )
+except ValueError:
+    from prometheus_client import REGISTRY
+    CLEANUP_FAILURES = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_data_cleanup_failures_total"), None)
+    if CLEANUP_FAILURES is None:
+        raise
 
 TRACER = trace.get_tracer(__name__)
 
@@ -1054,6 +1121,11 @@ def cleanup_old_data() -> None:
 
         except Exception as e:
             logging.error(f"Error during data cleanup: {e}")
+            # Emit metric for cleanup failure
+            try:
+                CLEANUP_FAILURES.inc()
+            except Exception:
+                pass  # Metrics are optional
             conn.rollback()
         finally:
             try:

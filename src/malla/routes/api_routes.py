@@ -5,10 +5,12 @@ API routes for the Meshtastic Mesh Health Web UI
 import json
 import logging
 import time
+from functools import wraps
 from typing import Any
 
 from flask import Blueprint, jsonify, request
 from flask import Response, stream_with_context
+from opentelemetry import trace
 from psycopg2.extras import RealDictCursor
 
 from ..database import (
@@ -20,6 +22,7 @@ from ..database import (
     get_db_connection,
 )
 from ..database.connection import put_db_connection
+from ..metrics import API_REQUEST_DURATION, API_REQUESTS_TOTAL
 from ..models.traceroute import TraceroutePacket
 from ..services.analytics_service import AnalyticsService
 from ..services.location_service import LocationService
@@ -36,9 +39,57 @@ from ..utils.traceroute_utils import parse_traceroute_payload
 
 logger = logging.getLogger(__name__)
 api_bp = Blueprint("api", __name__, url_prefix="/api")
+TRACER = trace.get_tracer(__name__)
+
+
+def instrument_api_endpoint(endpoint_name: str | None = None):
+    """Decorator to instrument API endpoints with metrics and OTLP spans."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Use function name if endpoint_name not provided
+            ep_name = endpoint_name or func.__name__
+            start_time = time.perf_counter()
+            status = "success"
+
+            with TRACER.start_as_current_span(f"api.{ep_name}") as span:
+                try:
+                    if span:
+                        span.set_attribute("http.route", f"/api/{ep_name}")
+                        span.set_attribute("http.method", request.method)
+
+                    result = func(*args, **kwargs)
+
+                    # Determine status from result
+                    if isinstance(result, tuple) and len(result) == 2:
+                        _, status_code = result
+                        status = "error" if status_code >= 400 else "success"
+                        if span:
+                            span.set_attribute("http.status_code", status_code)
+                    else:
+                        if span:
+                            span.set_attribute("http.status_code", 200)
+
+                    return result
+                except Exception as e:
+                    status = "error"
+                    if span:
+                        span.set_attribute("error", True)
+                        span.set_attribute("error.message", str(e))
+                    raise
+                finally:
+                    duration = time.perf_counter() - start_time
+                    API_REQUEST_DURATION.labels(endpoint=ep_name).observe(duration)
+                    API_REQUESTS_TOTAL.labels(endpoint=ep_name, status=status).inc()
+                    if span:
+                        span.set_attribute("duration_ms", duration * 1000)
+
+        return wrapper
+    return decorator
 
 
 @api_bp.route("/stats")
+@instrument_api_endpoint("stats")
 def api_stats():
     """API endpoint for dashboard statistics."""
     logger.info("API stats endpoint accessed")
@@ -200,6 +251,7 @@ def api_packets():
 
 
 @api_bp.route("/nodes")
+@instrument_api_endpoint("nodes")
 def api_nodes():
     """API endpoint for node data (with optional search)."""
     logger.info("API nodes endpoint accessed")

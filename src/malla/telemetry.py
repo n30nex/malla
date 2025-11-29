@@ -22,8 +22,7 @@ def setup_telemetry(app: Optional[Flask], endpoint: str) -> None:
 
     This sets up comprehensive instrumentation including:
     - Flask HTTP requests (if *app* is provided)
-    - Psycopg2 database operations (default)
-    - SQLite3 database operations (optional when using SQLite backend)
+    - Psycopg2 database operations (PostgreSQL-only)
     - Python logging (with trace context injection)
     - HTTP client requests (via requests library)
     - System metrics (CPU, memory, etc.)
@@ -31,7 +30,6 @@ def setup_telemetry(app: Optional[Flask], endpoint: str) -> None:
     Args:
         app: Optional Flask application instance.
         endpoint: The OTLP endpoint URL (e.g., "http://localhost:4317").
-        use_sqlite: If True, also instrument sqlite3 (for test/local SQLite runs).
     """
     if not endpoint:
         logger.info("OTLP endpoint not configured, skipping telemetry setup")

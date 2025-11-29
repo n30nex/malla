@@ -264,6 +264,23 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
             },
         }
 
+    # Add Prometheus metrics endpoint
+    @app.route("/metrics")
+    def metrics():
+        """Prometheus metrics endpoint."""
+        from .metrics import get_metrics, get_metrics_content_type
+        from flask import Response
+
+        try:
+            metrics_output = get_metrics()
+            return Response(
+                metrics_output,
+                mimetype=get_metrics_content_type(),
+            )
+        except Exception as e:
+            logger.error(f"Error generating metrics: {e}")
+            return {"error": str(e)}, 500
+
     logger.info("Flask application created successfully")
     return app
 

@@ -5,14 +5,13 @@ Tests the automatic cleanup of old packet_history and node_info records
 based on the data_retention_hours configuration parameter.
 """
 
-import os
-import sqlite3
-import tempfile
 import time
 
 import pytest
 
 from malla import mqtt_capture
+from malla.database.connection import get_db_connection, put_db_connection
+from psycopg2.extras import RealDictCursor
 
 
 class TestDataCleanup:
@@ -21,37 +20,54 @@ class TestDataCleanup:
     @pytest.mark.integration
     def test_cleanup_functionality(self):
         """Test that data cleanup correctly removes old records."""
-        # Create a temporary database file
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as temp_db:
-            temp_db_path = temp_db.name
+        # Initialize the database
+        mqtt_capture.init_database()
 
-        try:
-            # Override database file path
-            original_db_file = mqtt_capture.DATABASE_FILE
-            mqtt_capture.DATABASE_FILE = temp_db_path
+        # Use unique node IDs based on current time to avoid conflicts
+        import random
+        base_id = int(time.time() * 1000) % 0x7FFFFFFF  # Use timestamp-based unique IDs
+        node_id_1 = base_id + 1
+        node_id_2 = base_id + 2
+        node_id_3 = base_id + 3
 
-            # Initialize the database
-            mqtt_capture.init_database()
+        # Clean up any existing test data from previous runs
+        current_time = time.time()
+        old_time = current_time - (48 * 3600)  # 48 hours ago
+        cutoff_time = current_time - (24 * 3600)  # 24 hours ago (for cleanup verification)
 
-            # Insert test data
-            current_time = time.time()
-            old_time = current_time - (48 * 3600)  # 48 hours ago
+        with mqtt_capture.db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            try:
+                # Delete any existing test packets
+                cursor.execute("DELETE FROM packet_history WHERE topic LIKE 'test/%'")
+                # Delete any existing test nodes (if they exist)
+                cursor.execute(
+                    "DELETE FROM node_info WHERE node_id IN (%s, %s, %s)",
+                    (node_id_1, node_id_2, node_id_3),
+                )
+                conn.commit()
+            finally:
+                cursor.close()
+                put_db_connection(conn)
 
-            with mqtt_capture.db_lock:
-                conn = sqlite3.connect(temp_db_path)
-                cursor = conn.cursor()
+        # Insert test data
+        with mqtt_capture.db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
+            try:
                 # Insert old packet history records
                 cursor.execute(
-                    "INSERT INTO packet_history (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name) VALUES (?, ?, ?, ?, ?, ?)",
-                    (old_time, "test/topic", 123456, 654321, 1, "TEXT_MESSAGE_APP"),
+                    "INSERT INTO packet_history (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (old_time, "test/topic", node_id_1, 654321, 1, "TEXT_MESSAGE_APP"),
                 )
                 cursor.execute(
-                    "INSERT INTO packet_history (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO packet_history (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name) VALUES (%s, %s, %s, %s, %s, %s)",
                     (
                         old_time + 3600,
                         "test/topic2",
-                        123457,
+                        node_id_2,
                         654322,
                         1,
                         "TEXT_MESSAGE_APP",
@@ -60,33 +76,39 @@ class TestDataCleanup:
 
                 # Insert recent packet history records
                 cursor.execute(
-                    "INSERT INTO packet_history (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO packet_history (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name) VALUES (%s, %s, %s, %s, %s, %s)",
                     (
                         current_time - 3600,
                         "test/topic3",
-                        123458,
+                        node_id_3,
                         654323,
                         1,
                         "TEXT_MESSAGE_APP",
                     ),
                 )
 
-                # Insert old node info records
+                # Insert old node info records (use ON CONFLICT to handle duplicates)
                 cursor.execute(
-                    "INSERT INTO node_info (node_id, hex_id, long_name, short_name, first_seen, last_updated) VALUES (?, ?, ?, ?, ?, ?)",
-                    (123456, "!123456", "Old Node 1", "ON1", old_time, old_time),
+                    """INSERT INTO node_info (node_id, hex_id, long_name, short_name, first_seen, last_updated)
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (node_id) DO UPDATE SET last_updated = EXCLUDED.last_updated""",
+                    (node_id_1, f"!{node_id_1:08x}", "Old Node 1", "ON1", old_time, old_time),
                 )
                 cursor.execute(
-                    "INSERT INTO node_info (node_id, hex_id, long_name, short_name, first_seen, last_updated) VALUES (?, ?, ?, ?, ?, ?)",
-                    (123457, "!123457", "Old Node 2", "ON2", old_time, old_time),
+                    """INSERT INTO node_info (node_id, hex_id, long_name, short_name, first_seen, last_updated)
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (node_id) DO UPDATE SET last_updated = EXCLUDED.last_updated""",
+                    (node_id_2, f"!{node_id_2:08x}", "Old Node 2", "ON2", old_time, old_time),
                 )
 
                 # Insert recent node info records
                 cursor.execute(
-                    "INSERT INTO node_info (node_id, hex_id, long_name, short_name, first_seen, last_updated) VALUES (?, ?, ?, ?, ?, ?)",
+                    """INSERT INTO node_info (node_id, hex_id, long_name, short_name, first_seen, last_updated)
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (node_id) DO UPDATE SET last_updated = EXCLUDED.last_updated""",
                     (
-                        123458,
-                        "!123458",
+                        node_id_3,
+                        f"!{node_id_3:08x}",
                         "Recent Node",
                         "RN",
                         current_time - 3600,
@@ -95,170 +117,180 @@ class TestDataCleanup:
                 )
 
                 conn.commit()
-                conn.close()
+            finally:
+                cursor.close()
+                put_db_connection(conn)
 
-            # Verify initial data
-            with mqtt_capture.db_lock:
-                conn = sqlite3.connect(temp_db_path)
-                cursor = conn.cursor()
-
-                cursor.execute("SELECT COUNT(*) FROM packet_history")
-                cursor.fetchone()[0]
-
-                cursor.execute("SELECT COUNT(*) FROM node_info")
-                cursor.fetchone()[0]
-
-                conn.close()
-
-            # Override data retention hours to 24 hours
-            original_retention = mqtt_capture.DATA_RETENTION_HOURS
-            mqtt_capture.DATA_RETENTION_HOURS = 24
+        # Verify initial data - count only our test packets
+        with mqtt_capture.db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             try:
-                # Run the cleanup function
-                mqtt_capture.cleanup_old_data()
+                # Count only test packets (by topic prefix)
+                cursor.execute("SELECT COUNT(*) as count FROM packet_history WHERE topic LIKE 'test/%'")
+                test_packets = cursor.fetchone()["count"]
 
-                # Verify cleanup results
-                with mqtt_capture.db_lock:
-                    conn = sqlite3.connect(temp_db_path)
-                    cursor = conn.cursor()
-
-                    cursor.execute("SELECT COUNT(*) FROM packet_history")
-                    remaining_packets = cursor.fetchone()[0]
-
-                    cursor.execute("SELECT COUNT(*) FROM node_info")
-                    remaining_nodes = cursor.fetchone()[0]
-
-                    # Check that old packets were deleted but recent ones remain
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM packet_history WHERE timestamp < ?",
-                        (current_time - 24 * 3600,),
-                    )
-                    old_packets_remaining = cursor.fetchone()[0]
-
-                    # Check that old nodes were deleted but recent ones remain
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM node_info WHERE last_updated < ?",
-                        (current_time - 24 * 3600,),
-                    )
-                    old_nodes_remaining = cursor.fetchone()[0]
-
-                    conn.close()
-
-                # Verify results
-                assert remaining_packets == 1, (
-                    f"Expected 1 packet to remain, got {remaining_packets}"
+                # Count only test nodes (by our node IDs)
+                cursor.execute(
+                    "SELECT COUNT(*) as count FROM node_info WHERE node_id IN (%s, %s, %s)",
+                    (node_id_1, node_id_2, node_id_3),
                 )
-                assert remaining_nodes == 1, (
-                    f"Expected 1 node to remain, got {remaining_nodes}"
-                )
-                assert old_packets_remaining == 0, (
-                    f"Expected 0 old packets to remain, got {old_packets_remaining}"
-                )
-                assert old_nodes_remaining == 0, (
-                    f"Expected 0 old nodes to remain, got {old_nodes_remaining}"
-                )
+                test_nodes = cursor.fetchone()["count"]
 
+                assert test_packets == 3, f"Expected 3 test packets, got {test_packets}"
+                assert test_nodes == 3, f"Expected 3 test nodes, got {test_nodes}"
             finally:
-                # Restore original retention hours
-                mqtt_capture.DATA_RETENTION_HOURS = original_retention
+                cursor.close()
+                put_db_connection(conn)
+
+        # Override data retention hours to 24 hours
+        original_retention = mqtt_capture.DATA_RETENTION_HOURS
+        mqtt_capture.DATA_RETENTION_HOURS = 24
+
+        try:
+            # Run the cleanup function (ensure lock is released before calling)
+            # Add a small delay to ensure any pending transactions are committed
+            import time
+            time.sleep(0.1)
+            mqtt_capture.cleanup_old_data()
+
+            # Verify cleanup results - check only our test data
+            with mqtt_capture.db_lock:
+                conn = get_db_connection()
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+                try:
+                    # Count remaining test packets
+                    cursor.execute("SELECT COUNT(*) as count FROM packet_history WHERE topic LIKE 'test/%'")
+                    remaining_test_packets = cursor.fetchone()["count"]
+
+                    # Count remaining test nodes
+                    cursor.execute(
+                        "SELECT COUNT(*) as count FROM node_info WHERE node_id IN (%s, %s, %s)",
+                        (node_id_1, node_id_2, node_id_3),
+                    )
+                    remaining_test_nodes = cursor.fetchone()["count"]
+
+                    # Check that old test packets were deleted but recent ones remain
+                    cursor.execute(
+                        "SELECT COUNT(*) as count FROM packet_history WHERE topic LIKE 'test/%' AND timestamp < %s",
+                        (cutoff_time,),
+                    )
+                    old_test_packets_remaining = cursor.fetchone()["count"]
+
+                    # Check that old test nodes were deleted but recent ones remain
+                    cursor.execute(
+                        "SELECT COUNT(*) as count FROM node_info WHERE node_id IN (%s, %s, %s) AND last_updated < %s",
+                        (node_id_1, node_id_2, node_id_3, cutoff_time),
+                    )
+                    old_test_nodes_remaining = cursor.fetchone()["count"]
+
+                    # Verify results
+                    assert remaining_test_packets == 1, (
+                        f"Expected 1 test packet to remain, got {remaining_test_packets}"
+                    )
+                    assert remaining_test_nodes == 1, (
+                        f"Expected 1 test node to remain, got {remaining_test_nodes}"
+                    )
+                    assert old_test_packets_remaining == 0, (
+                        f"Expected 0 old test packets to remain, got {old_test_packets_remaining}"
+                    )
+                    assert old_test_nodes_remaining == 0, (
+                        f"Expected 0 old test nodes to remain, got {old_test_nodes_remaining}"
+                    )
+                finally:
+                    cursor.close()
+                    put_db_connection(conn)
 
         finally:
-            # Restore original database file path
-            mqtt_capture.DATABASE_FILE = original_db_file
-
-            # Clean up temporary database
-            if os.path.exists(temp_db_path):
-                os.unlink(temp_db_path)
+            # Restore original retention hours
+            mqtt_capture.DATA_RETENTION_HOURS = original_retention
 
     @pytest.mark.integration
     def test_cleanup_disabled(self):
         """Test that cleanup is disabled when retention hours is 0."""
-        # Create a temporary database file
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as temp_db:
-            temp_db_path = temp_db.name
+        # Initialize the database
+        mqtt_capture.init_database()
 
-        try:
-            # Override database file path
-            original_db_file = mqtt_capture.DATABASE_FILE
-            mqtt_capture.DATABASE_FILE = temp_db_path
+        # Use unique node ID based on current time to avoid conflicts
+        base_id = int(time.time() * 1000) % 0x7FFFFFFF
+        node_id = base_id + 100
 
-            # Initialize the database
-            mqtt_capture.init_database()
+        # Insert test data
+        current_time = time.time()
+        old_time = current_time - (48 * 3600)  # 48 hours ago
 
-            # Insert test data
-            current_time = time.time()
-            old_time = current_time - (48 * 3600)  # 48 hours ago
+        with mqtt_capture.db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-            with mqtt_capture.db_lock:
-                conn = sqlite3.connect(temp_db_path)
-                cursor = conn.cursor()
-
+            try:
                 # Insert old packet history records
                 cursor.execute(
-                    "INSERT INTO packet_history (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name) VALUES (?, ?, ?, ?, ?, ?)",
-                    (old_time, "test/topic", 123456, 654321, 1, "TEXT_MESSAGE_APP"),
+                    "INSERT INTO packet_history (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (old_time, "test/topic", node_id, 654321, 1, "TEXT_MESSAGE_APP"),
                 )
 
-                # Insert old node info records
+                # Insert old node info records (use ON CONFLICT to handle duplicates)
                 cursor.execute(
-                    "INSERT INTO node_info (node_id, hex_id, long_name, short_name, first_seen, last_updated) VALUES (?, ?, ?, ?, ?, ?)",
-                    (123456, "!123456", "Old Node 1", "ON1", old_time, old_time),
+                    """INSERT INTO node_info (node_id, hex_id, long_name, short_name, first_seen, last_updated)
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (node_id) DO UPDATE SET last_updated = EXCLUDED.last_updated""",
+                    (node_id, f"!{node_id:08x}", "Old Node 1", "ON1", old_time, old_time),
                 )
 
                 conn.commit()
-                conn.close()
+            finally:
+                cursor.close()
+                put_db_connection(conn)
 
-            # Verify initial data
-            with mqtt_capture.db_lock:
-                conn = sqlite3.connect(temp_db_path)
-                cursor = conn.cursor()
-
-                cursor.execute("SELECT COUNT(*) FROM packet_history")
-                initial_packets = cursor.fetchone()[0]
-
-                cursor.execute("SELECT COUNT(*) FROM node_info")
-                initial_nodes = cursor.fetchone()[0]
-
-                conn.close()
-
-            # Override data retention hours to 0 (disabled)
-            original_retention = mqtt_capture.DATA_RETENTION_HOURS
-            mqtt_capture.DATA_RETENTION_HOURS = 0
+        # Verify initial data
+        with mqtt_capture.db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             try:
-                # Run the cleanup function
-                mqtt_capture.cleanup_old_data()
+                cursor.execute("SELECT COUNT(*) as count FROM packet_history")
+                initial_packets = cursor.fetchone()["count"]
 
-                # Verify no cleanup occurred
-                with mqtt_capture.db_lock:
-                    conn = sqlite3.connect(temp_db_path)
-                    cursor = conn.cursor()
-
-                    cursor.execute("SELECT COUNT(*) FROM packet_history")
-                    remaining_packets = cursor.fetchone()[0]
-
-                    cursor.execute("SELECT COUNT(*) FROM node_info")
-                    remaining_nodes = cursor.fetchone()[0]
-
-                    conn.close()
-
-                # Verify results
-                assert remaining_packets == initial_packets, (
-                    f"Expected {initial_packets} packets to remain, got {remaining_packets}"
-                )
-                assert remaining_nodes == initial_nodes, (
-                    f"Expected {initial_nodes} nodes to remain, got {remaining_nodes}"
-                )
-
+                cursor.execute("SELECT COUNT(*) as count FROM node_info")
+                initial_nodes = cursor.fetchone()["count"]
             finally:
-                # Restore original retention hours
-                mqtt_capture.DATA_RETENTION_HOURS = original_retention
+                cursor.close()
+                put_db_connection(conn)
+
+        # Override data retention hours to 0 (disabled)
+        original_retention = mqtt_capture.DATA_RETENTION_HOURS
+        mqtt_capture.DATA_RETENTION_HOURS = 0
+
+        try:
+            # Run the cleanup function
+            mqtt_capture.cleanup_old_data()
+
+            # Verify no cleanup occurred
+            with mqtt_capture.db_lock:
+                conn = get_db_connection()
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+                try:
+                    cursor.execute("SELECT COUNT(*) as count FROM packet_history")
+                    remaining_packets = cursor.fetchone()["count"]
+
+                    cursor.execute("SELECT COUNT(*) as count FROM node_info")
+                    remaining_nodes = cursor.fetchone()["count"]
+
+                    # Verify results
+                    assert remaining_packets == initial_packets, (
+                        f"Expected {initial_packets} packets to remain, got {remaining_packets}"
+                    )
+                    assert remaining_nodes == initial_nodes, (
+                        f"Expected {initial_nodes} nodes to remain, got {remaining_nodes}"
+                    )
+                finally:
+                    cursor.close()
+                    put_db_connection(conn)
 
         finally:
-            # Restore original database file path
-            mqtt_capture.DATABASE_FILE = original_db_file
-
-            # Clean up temporary database
-            if os.path.exists(temp_db_path):
-                os.unlink(temp_db_path)
+            # Restore original retention hours
+            mqtt_capture.DATA_RETENTION_HOURS = original_retention
