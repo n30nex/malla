@@ -9,15 +9,11 @@ that starts Gunicorn with appropriate configuration for production deployment.
 import logging
 import sys
 
-from .config import get_config
+from .config import describe_database_target, get_config
+from .logging_utils import setup_logging
 from .web_ui import create_app
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+setup_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +55,9 @@ def main():
 
         # Print startup information
         print("=" * 60)
-        print("🌐 Malla Web UI (Gunicorn)")
+        print("Malla Web UI (Gunicorn)")
         print("=" * 60)
-        print(f"Database: {cfg.database_file}")
+        print(f"Database: {describe_database_target(cfg)}")
         print(f"Web UI: http://{cfg.host}:{cfg.port}")
         print("Workers: auto-detected")
         print(f"Debug mode: {cfg.debug}")

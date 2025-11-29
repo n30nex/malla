@@ -51,7 +51,6 @@ services:
         condition: service_started
 
   malla-capture:
-    build: .
     image: malla:local
     command: ["/app/.venv/bin/malla-capture"]
     environment:

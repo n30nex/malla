@@ -38,7 +38,8 @@ import threading
 import time
 from typing import Any
 
-from prometheus_client import Counter, Gauge, start_http_server
+from opentelemetry import trace
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 import paho.mqtt.client as mqtt
 import psycopg2
@@ -67,6 +68,7 @@ from psycopg2.extras import RealDictCursor
 # ---------------------------------------------------------------------------
 from malla.config import get_config, validate_config  # Import here to avoid circular import issues
 from malla.database.connection import get_db_connection, put_db_connection
+from malla.logging_utils import setup_logging
 from malla.telemetry import setup_telemetry
 
 # Load the singleton configuration once at module import time.  This ensures the
@@ -109,10 +111,7 @@ METRICS_PORT: int = getattr(_cfg, "metrics_port", 9100)
 
 # Logging configuration - falls back to INFO if an invalid level was supplied
 LOG_LEVEL = _cfg.log_level.upper()
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+setup_logging(LOG_LEVEL)
 
 # Validate config and enable OpenTelemetry if configured
 validate_config(_cfg)
@@ -147,6 +146,18 @@ PACKETS_PARSE_FAILED = Counter("malla_packets_parse_failed_total", "Packets that
 PACKETS_DECRYPT_SUCCESS = Counter("malla_packets_decrypt_success_total", "Packets decrypted successfully")
 PACKETS_DECRYPT_FAILED = Counter("malla_packets_decrypt_failed_total", "Packets failed to decrypt")
 ACTIVE_THREADS = Gauge("malla_active_threads", "Active threads in capture process")
+DB_QUERY_DURATION = Histogram(
+    "malla_db_query_seconds",
+    "Database operation duration in seconds",
+    ["operation"],
+)
+PACKET_PROCESS_DURATION = Histogram(
+    "malla_packet_process_seconds",
+    "End-to-end MQTT packet processing duration in seconds",
+    ["stage"],
+)
+
+TRACER = trace.get_tracer(__name__)
 
 
 # --- Decryption Functions ---
@@ -874,50 +885,60 @@ def log_packet_to_database(
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         try:
-            cursor.execute(
-                """
-                INSERT INTO packet_history
-                (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name,
-                 gateway_id, channel_id, mesh_packet_id, rssi, snr, hop_limit, hop_start, payload_length,
-                 raw_payload, processed_successfully, via_mqtt, want_ack, priority, delayed,
-                 channel_index, rx_time, pki_encrypted, next_hop, relay_node, tx_after,
-                 message_type, raw_service_envelope, parsing_error)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-                (
-                    current_time,
-                    topic,
-                    from_node_id,
-                    to_node_id,
-                    portnum,
-                    portnum_name,
-                    gateway_id,
-                    channel_id,
-                    mesh_packet_id,
-                    rssi,
-                    snr,
-                    hop_limit,
-                    hop_start,
-                    payload_length,
-                    raw_payload,
-                    processed_successfully,
-                    via_mqtt,
-                    want_ack,
-                    priority,
-                    delayed,
-                    channel_index,
-                    rx_time,
-                    pki_encrypted,
-                    next_hop,
-                    relay_node,
-                    tx_after,
-                    message_type,
-                    raw_service_envelope_data,
-                    parsing_error,
-                ),
-            )
+            with TRACER.start_as_current_span("db.insert.packet_history") as span, DB_QUERY_DURATION.labels(
+                "insert_packet_history"
+            ).time():
+                if span is not None:
+                    span.set_attribute("db.topic", topic)
+                    span.set_attribute("db.gateway_id", gateway_id or "")
+                    span.set_attribute("db.channel_id", channel_id or "")
+                    span.set_attribute("db.portnum_name", portnum_name or "")
+                    span.set_attribute("db.processed_successfully", processed_successfully)
 
-            conn.commit()
+                cursor.execute(
+                    """
+                    INSERT INTO packet_history
+                    (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name,
+                     gateway_id, channel_id, mesh_packet_id, rssi, snr, hop_limit, hop_start, payload_length,
+                     raw_payload, processed_successfully, via_mqtt, want_ack, priority, delayed,
+                     channel_index, rx_time, pki_encrypted, next_hop, relay_node, tx_after,
+                     message_type, raw_service_envelope, parsing_error)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                    (
+                        current_time,
+                        topic,
+                        from_node_id,
+                        to_node_id,
+                        portnum,
+                        portnum_name,
+                        gateway_id,
+                        channel_id,
+                        mesh_packet_id,
+                        rssi,
+                        snr,
+                        hop_limit,
+                        hop_start,
+                        payload_length,
+                        raw_payload,
+                        processed_successfully,
+                        via_mqtt,
+                        want_ack,
+                        priority,
+                        delayed,
+                        channel_index,
+                        rx_time,
+                        pki_encrypted,
+                        next_hop,
+                        relay_node,
+                        tx_after,
+                        message_type,
+                        raw_service_envelope_data,
+                        parsing_error,
+                    ),
+                )
+
+                conn.commit()
         finally:
             try:
                 cursor.close()
@@ -1147,42 +1168,57 @@ def on_connect(
 
 def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
     """Callback for when a PUBLISH message is received from the server."""
-    logging.debug(f"Received message on topic {msg.topic}: {len(msg.payload)} bytes")
-
-    with ingest_stats_lock:
-        ingest_stats["received"] += 1
-    PACKETS_RECEIVED.inc()
-
-    # Skip JSON messages - we only want protobuf messages
-    if "/json/" in msg.topic:
-        logging.debug(f"Skipping JSON message on topic {msg.topic}")
-        return
-
-    # Skip status/housekeeping topics that don't carry ServiceEnvelope protobufs
-    topic_parts = msg.topic.split("/")
-    if len(topic_parts) >= 4 and topic_parts[3] == "stat":
-        logging.debug(f"Skipping status topic (no protobuf expected): {msg.topic}")
-        return
-
-    logging.debug(f"Processing protobuf message on topic {msg.topic}")
-
-    # Always store the raw message data first, regardless of parsing success
-    raw_service_envelope_data = msg.payload
-    service_envelope = None
-    mesh_packet = None
+    process_start = time.perf_counter()
     processed_successfully = False
     parsing_error = None
-
-    # Extract message type from topic for logging
     message_type = None
-    topic_parts = []
-    try:
+    span = None
+    span_cm = TRACER.start_as_current_span(
+        "mqtt.on_message",
+        attributes={
+            "mqtt.topic": msg.topic,
+            "mqtt.qos": getattr(msg, "qos", None),
+        },
+    )
+
+    with span_cm as span:
+        logging.debug(f"Received message on topic {msg.topic}: {len(msg.payload)} bytes")
+
+        with ingest_stats_lock:
+            ingest_stats["received"] += 1
+        PACKETS_RECEIVED.inc()
+
+        # Skip JSON messages - we only want protobuf messages
+        if "/json/" in msg.topic:
+            logging.debug(f"Skipping JSON message on topic {msg.topic}")
+            if span is not None:
+                span.set_attribute("malla.packet.skipped", True)
+            return
+
+        # Skip status/housekeeping topics that don't carry ServiceEnvelope protobufs
         topic_parts = msg.topic.split("/")
-        if len(topic_parts) >= 4:
-            message_type = topic_parts[3]  # Should be 'e', 'c', 'p', etc.
-            logging.debug(f"Message type from topic: {message_type}")
-    except Exception:
-        pass
+        if len(topic_parts) >= 4 and topic_parts[3] == "stat":
+            logging.debug(f"Skipping status topic (no protobuf expected): {msg.topic}")
+            if span is not None:
+                span.set_attribute("malla.packet.skipped", True)
+            return
+
+        logging.debug(f"Processing protobuf message on topic {msg.topic}")
+
+        # Always store the raw message data first, regardless of parsing success
+        raw_service_envelope_data = msg.payload
+        service_envelope = None
+        mesh_packet = None
+
+        # Extract message type from topic for logging
+        topic_parts = []
+        try:
+            topic_parts = msg.topic.split("/")
+            if len(topic_parts) >= 4:
+                message_type = topic_parts[3]  # Should be 'e', 'c', 'p', etc.
+                logging.debug(f"Message type from topic: {message_type}")
+        except Exception:
+            pass
 
     try:
         # Attempt to parse the ServiceEnvelope
@@ -1482,34 +1518,49 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
             ingest_stats["parse_failed"] += 1
         PACKETS_PARSE_FAILED.inc()
 
-    # Always log packet to database, regardless of parsing success
     try:
-        log_packet_to_database(
-            msg.topic,
-            service_envelope,
-            mesh_packet,
-            processed_successfully,
-            raw_service_envelope_data,
-            parsing_error,
-        )
-    except Exception as db_error:
-        logging.error(f"Failed to log packet to database: {db_error}")
+        # Always log packet to database, regardless of parsing success
+        try:
+            log_packet_to_database(
+                msg.topic,
+                service_envelope,
+                mesh_packet,
+                processed_successfully,
+                raw_service_envelope_data,
+                parsing_error,
+            )
+        except Exception as db_error:
+            logging.error(f"Failed to log packet to database: {db_error}")
 
-    # Log statistics for different message types
-    if message_type and processed_successfully:
-        if message_type == "e":
-            logging.debug("Processed encrypted message")
-        elif message_type == "c":
-            logging.debug("Processed command message")
-        elif message_type == "p":
-            logging.debug("Processed position message")
-        else:
-            logging.debug(f"Processed message type: {message_type}")
+        # Log statistics for different message types
+        if message_type and processed_successfully:
+            if message_type == "e":
+                logging.debug("Processed encrypted message")
+            elif message_type == "c":
+                logging.debug("Processed command message")
+            elif message_type == "p":
+                logging.debug("Processed position message")
+            else:
+                logging.debug(f"Processed message type: {message_type}")
 
-    if processed_successfully:
-        with ingest_stats_lock:
-            ingest_stats["parsed_ok"] += 1
-        PACKETS_PARSED.inc()
+        if processed_successfully:
+            with ingest_stats_lock:
+                ingest_stats["parsed_ok"] += 1
+            PACKETS_PARSED.inc()
+
+    finally:
+        duration = time.perf_counter() - process_start
+        try:
+            PACKET_PROCESS_DURATION.labels("on_message").observe(duration)
+        except Exception:
+            # Metrics are optional; never block processing.
+            pass
+
+        if span is not None:
+            span.set_attribute("malla.packet.processed_successfully", processed_successfully)
+            span.set_attribute("malla.packet.parsing_error", parsing_error or "")
+            if message_type is not None:
+                span.set_attribute("malla.packet.message_type", message_type)
 
 
 def on_disconnect(

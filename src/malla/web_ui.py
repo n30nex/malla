@@ -16,7 +16,8 @@ from pathlib import Path
 from flask import Flask
 
 # Import application configuration loader
-from .config import AppConfig, get_config
+from .config import AppConfig, describe_database_target, get_config
+from .logging_utils import setup_logging
 
 # Optional CORS support will be checked inline
 # Import configuration and database setup
@@ -30,12 +31,7 @@ from .utils.node_utils import (
     stop_cache_cleanup,
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+setup_logging(os.getenv("MALLA_LOG_LEVEL", "INFO"))
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +194,7 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
 
     try:
         import markdown as _markdown  # import locally to avoid hard dependency at runtime until used
-    except ModuleNotFoundError:  # pragma: no cover – dependency should be present
+    except ModuleNotFoundError:  # pragma: no cover - dependency should be present
         _markdown = None  # type: ignore[assignment]
 
     @app.template_filter("markdown")
@@ -208,7 +204,7 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
         if text is None:
             return ""
         if _markdown is None:
-            logger.warning("markdown package not installed – returning raw text")
+            logger.warning("markdown package not installed; returning raw text")
             return text
         from markupsafe import Markup
 
@@ -222,6 +218,7 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
             "APP_NAME": cfg.name,
             "APP_CONFIG": cfg,
             "DATABASE_FILE": cfg.database_file,
+            "DATABASE_TARGET": describe_database_target(cfg),
         }
 
     # Initialize database
@@ -257,9 +254,9 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
             "name": "Meshtastic Mesh Health Web UI",
             "version": "2.0.0",
             "description": "Web interface for monitoring Meshtastic mesh network health",
-            "database_file": app.config["DATABASE_FILE"],
+            "database": describe_database_target(cfg),
             "components": {
-                "database": "Repository pattern with SQLite",
+                "database": "PostgreSQL repository layer",
                 "models": "Data models and packet parsing",
                 "services": "Business logic layer",
                 "utils": "Utility functions",
@@ -288,9 +285,9 @@ def main():
 
         # Print startup information
         print("=" * 60)
-        print("🌐 Meshtastic Mesh Health Web UI")
+        print("Malla Web UI")
         print("=" * 60)
-        print(f"Database: {app.config['DATABASE_FILE']}")
+        print(f"Database: {describe_database_target(cfg)}")
         print(f"Web UI: http://{host}:{port}")
         print(f"Debug mode: {debug}")
         print(f"Log level: {logging.getLogger().level}")

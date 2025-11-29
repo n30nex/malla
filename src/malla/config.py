@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -202,10 +203,24 @@ def _looks_like_sqlite(cfg: AppConfig) -> bool:
     return False
 
 
+def _is_postgres_url(url: str | None) -> bool:
+    """Check if a connection URL uses a PostgreSQL scheme."""
+    if not url:
+        return False
+    parsed = urlparse(url)
+    return parsed.scheme in {"postgresql", "postgres"}
+
+
 def validate_config(cfg: AppConfig) -> None:
     """Validate required configuration and enforce PostgreSQL-only backend."""
 
     errors: list[str] = []
+
+    if cfg.database_url and not _is_postgres_url(cfg.database_url):
+        errors.append(
+            "MALLA_DATABASE_URL must use a PostgreSQL DSN (postgresql:// or postgres://). "
+            "SQLite and other backends are unsupported."
+        )
 
     if _looks_like_sqlite(cfg):
         errors.append(
@@ -239,6 +254,22 @@ def get_config() -> AppConfig:
     if _config_singleton is None:
         _config_singleton = load_config()
     return _config_singleton
+
+
+def describe_database_target(cfg: AppConfig) -> str:
+    """Return a human-friendly description of the configured database."""
+
+    if cfg.database_url and _is_postgres_url(cfg.database_url):
+        parsed = urlparse(cfg.database_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 5432
+        dbname = parsed.path.lstrip("/") or "meshtastic_history"
+        return f"PostgreSQL at {host}:{port}/{dbname}"
+
+    host = cfg.database_host or "localhost"
+    port = cfg.database_port or 5432
+    name = cfg.database_name or "meshtastic_history"
+    return f"PostgreSQL at {host}:{port}/{name}"
 
 
 # ---------------------------------------------------------------------------
