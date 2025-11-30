@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% from "components/table_layout_macros.html" import fullscreen_table_container, filter_section, table_controls_section, table_stats_section, table_layout_styles %}
+{% from "components/table_layout_macros.html" import fullscreen_table_container, filter_section, table_controls_section,
+table_stats_section, table_layout_styles %}
 
 {% block title %}Nodes - Malla{% endblock %}
 
@@ -13,64 +14,78 @@
 </div> <!-- Close the base template's container -->
 
 {% call fullscreen_table_container("nodesTable", "Network Nodes", "bi bi-diagram-3", "toggleSidebar") %}
-    <!-- Main table content -->
-    <div id="nodesTable" class="modern-table-container"></div>
+<!-- Main table content -->
+<div id="nodesTable" class="modern-table-container"></div>
 {% endcall %}
 
 <!-- Sidebar content (will be injected into the sidebar) -->
 <div id="sidebarContent" style="display: none;">
     {% call filter_section("filtersForm", "Node Filters") %}
-        <div class="row g-3">
-            <div class="col-12">
-                <label for="search" class="form-label">Search</label>
-                <input type="text" class="form-control form-control-sm" id="search" name="search" placeholder="Search by name, ID, or hardware...">
-            </div>
-            <div class="col-12">
-                <label for="role" class="form-label">Role</label>
-                <select class="form-select form-select-sm" id="role" name="role">
-                    <option value="">All Roles</option>
-                    <!-- Options will be loaded dynamically -->
-                </select>
-            </div>
-            <div class="col-12">
-                <label for="hw_model" class="form-label">Hardware Model</label>
-                <select class="form-select form-select-sm" id="hw_model" name="hw_model">
-                    <option value="">All Hardware</option>
-                    <!-- Options will be loaded dynamically -->
-                </select>
-            </div>
-            <div class="col-12">
-                <label for="primary_channel" class="form-label">Primary Channel</label>
-                <select class="form-select form-select-sm" id="primary_channel" name="primary_channel">
-                    <option value="">All Channels</option>
-                    <!-- Options will be loaded dynamically -->
-                </select>
-            </div>
-            <div class="col-12">
-                <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="active_only" name="active_only" value="1">
-                    <label class="form-check-label" for="active_only">
-                        <i class="bi bi-activity"></i> Active nodes only (24h)
-                    </label>
-                </div>
-            </div>
-            <div class="col-12">
-                <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="named_only" name="named_only" value="1">
-                    <label class="form-check-label" for="named_only">
-                        <i class="bi bi-tag"></i> Named nodes only
-                    </label>
-                </div>
+    <div class="row g-3">
+        <div class="col-12">
+            <label for="search" class="form-label">Search</label>
+            <input type="text" class="form-control form-control-sm" id="search" name="search"
+                placeholder="Search by name, ID, or hardware...">
+        </div>
+        <div class="col-12">
+            <label for="role" class="form-label">Role</label>
+            <select class="form-select form-select-sm" id="role" name="role">
+                <option value="">All Roles</option>
+                <!-- Options will be loaded dynamically -->
+            </select>
+        </div>
+        <div class="col-12">
+            <label for="hw_model" class="form-label">Hardware Model</label>
+            <select class="form-select form-select-sm" id="hw_model" name="hw_model">
+                <option value="">All Hardware</option>
+                <!-- Options will be loaded dynamically -->
+            </select>
+        </div>
+        <div class="col-12">
+            <label for="primary_channel" class="form-label">Primary Channel</label>
+            <select class="form-select form-select-sm" id="primary_channel" name="primary_channel">
+                <option value="">All Channels</option>
+                <!-- Options will be loaded dynamically -->
+            </select>
+        </div>
+        <div class="col-12">
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="active_only" name="active_only" value="1">
+                <label class="form-check-label" for="active_only">
+                    <i class="bi bi-activity"></i> Active nodes only (24h)
+                </label>
             </div>
         </div>
+        <div class="col-12">
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="named_only" name="named_only" value="1">
+                <label class="form-check-label" for="named_only">
+                    <i class="bi bi-tag"></i> Named nodes only
+                </label>
+            </div>
+        </div>
+    </div>
     {% endcall %}
 
     {% set table_controls = [
-        {"class": "btn-primary", "id": "applyFilters", "icon": "bi bi-search", "text": "Apply Filters", "type": "button"},
-        {"class": "btn-outline-secondary", "id": "clearFilters", "icon": "bi bi-x-circle", "text": "Clear Filters", "type": "button"},
-        {"class": "btn-outline-info", "id": "refreshTable", "icon": "bi bi-arrow-clockwise", "text": "Refresh", "type": "button"},
-        {"class": "btn-outline-success", "id": "shareFilters", "icon": "bi bi-share", "text": "Share", "type": "button"}
+    {"class": "btn-primary", "id": "applyFilters", "icon": "bi bi-search", "text": "Apply Filters", "type": "button"},
+    {"class": "btn-outline-secondary", "id": "clearFilters", "icon": "bi bi-x-circle", "text": "Clear Filters", "type":
+    "button"},
+    {"class": "btn-outline-info", "id": "refreshTable", "icon": "bi bi-arrow-clockwise", "text": "Refresh", "type":
+    "button"},
+    {"class": "btn-outline-success", "id": "shareFilters", "icon": "bi bi-share", "text": "Share", "type": "button"},
+    {"class": "btn-outline-secondary dropdown-toggle", "id": "exportData", "icon": "bi bi-download", "text": "Export",
+    "type": "button", "attrs": 'data-bs-toggle="dropdown" aria-expanded="false"'},
     ] %}
+
+    <!-- Export Dropdown Menu -->
+    <ul class="dropdown-menu" aria-labelledby="exportData">
+        <li><a class="dropdown-item" href="#" id="exportCSV"><i class="bi bi-filetype-csv me-2"></i>Export as CSV</a>
+        </li>
+        <li><a class="dropdown-item" href="#" id="exportJSON"><i class="bi bi-filetype-json me-2"></i>Export as JSON</a>
+        </li>
+    </ul>
+
     {{ table_controls_section(table_controls) }}
 
     <!-- Legend Section -->
@@ -98,264 +113,268 @@
 <script src="{{ url_for('static', filename='js/table-filter-controller.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modern-table.js') }}"></script>
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Move sidebar content into the actual sidebar FIRST
-    const sidebarContent = document.getElementById('sidebarContent');
-    const sidebarContainer = document.querySelector('.sidebar-content');
-    if (sidebarContent && sidebarContainer) {
-        sidebarContainer.innerHTML = sidebarContent.innerHTML;
-        sidebarContent.remove();
-    }
-
-    // Initialize URL filter manager AFTER sidebar content is moved
-    const urlManager = new URLFilterManager();
-
-    // Load hardware models and roles dynamically
-    loadHardwareModels();
-    loadNodeRoles();
-    loadPrimaryChannels();
-
-    // Initialize sidebar toggle functionality
-    const toggleBtn = document.getElementById('toggleSidebar');
-    const closeBtn = document.getElementById('closeSidebar');
-    const sidebar = document.querySelector('.table-sidebar');
-
-    function toggleSidebar() {
-        sidebar.classList.toggle('collapsed');
-        const icon = toggleBtn.querySelector('i');
-        if (sidebar.classList.contains('collapsed')) {
-            icon.className = 'bi bi-layout-sidebar-inset';
-        } else {
-            icon.className = 'bi bi-layout-sidebar-inset-reverse';
+    document.addEventListener('DOMContentLoaded', function () {
+        // Move sidebar content into the actual sidebar FIRST
+        const sidebarContent = document.getElementById('sidebarContent');
+        const sidebarContainer = document.querySelector('.sidebar-content');
+        if (sidebarContent && sidebarContainer) {
+            sidebarContainer.innerHTML = sidebarContent.innerHTML;
+            sidebarContent.remove();
         }
-    }
 
-    toggleBtn.addEventListener('click', toggleSidebar);
-    closeBtn.addEventListener('click', toggleSidebar);
+        // Initialize URL filter manager AFTER sidebar content is moved
+        const urlManager = new URLFilterManager();
 
-    // Load hardware models from API
-    async function loadHardwareModels() {
-        try {
-            const response = await fetch('/api/meshtastic/hardware-models');
-            const data = await response.json();
+        // Load hardware models and roles dynamically
+        loadHardwareModels();
+        loadNodeRoles();
+        loadPrimaryChannels();
 
-            if (data.hardware_models) {
-                const select = document.getElementById('hw_model');
-                // Keep the "All Hardware" option
-                const allOption = select.querySelector('option[value=""]');
-                select.innerHTML = '';
-                select.appendChild(allOption);
+        // Initialize sidebar toggle functionality
+        const toggleBtn = document.getElementById('toggleSidebar');
+        const closeBtn = document.getElementById('closeSidebar');
+        const sidebar = document.querySelector('.table-sidebar');
 
-                // Add hardware model options
-                data.hardware_models.forEach(([value, displayName]) => {
-                    const option = document.createElement('option');
-                    option.value = value;
-                    option.textContent = displayName;
-                    select.appendChild(option);
-                });
+        function toggleSidebar() {
+            sidebar.classList.toggle('collapsed');
+            const icon = toggleBtn.querySelector('i');
+            if (sidebar.classList.contains('collapsed')) {
+                icon.className = 'bi bi-layout-sidebar-inset';
+            } else {
+                icon.className = 'bi bi-layout-sidebar-inset-reverse';
             }
-        } catch (error) {
-            console.error('Error loading hardware models:', error);
         }
-    }
 
-    // Load node roles from API
-    async function loadNodeRoles() {
-        try {
-            const response = await fetch('/api/meshtastic/node-roles');
-            const data = await response.json();
+        toggleBtn.addEventListener('click', toggleSidebar);
+        closeBtn.addEventListener('click', toggleSidebar);
 
-            if (data.node_roles) {
-                const select = document.getElementById('role');
-                // Keep the "All Roles" option
-                const allOption = select.querySelector('option[value=""]');
-                select.innerHTML = '';
-                select.appendChild(allOption);
+        // Load hardware models from API
+        async function loadHardwareModels() {
+            try {
+                const response = await fetch('/api/meshtastic/hardware-models');
+                const data = await response.json();
 
-                // Add role options
-                data.node_roles.forEach(([value, displayName]) => {
-                    const option = document.createElement('option');
-                    option.value = value;
-                    option.textContent = displayName;
-                    select.appendChild(option);
-                });
+                if (data.hardware_models) {
+                    const select = document.getElementById('hw_model');
+                    // Keep the "All Hardware" option
+                    const allOption = select.querySelector('option[value=""]');
+                    select.innerHTML = '';
+                    select.appendChild(allOption);
+
+                    // Add hardware model options
+                    data.hardware_models.forEach(([value, displayName]) => {
+                        const option = document.createElement('option');
+                        option.value = value;
+                        option.textContent = displayName;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading hardware models:', error);
             }
-        } catch (error) {
-            console.error('Error loading node roles:', error);
         }
-    }
 
-    // Load primary channels from API
-    async function loadPrimaryChannels() {
-        try {
-            const response = await fetch('/api/meshtastic/channels');
-            const data = await response.json();
+        // Load node roles from API
+        async function loadNodeRoles() {
+            try {
+                const response = await fetch('/api/meshtastic/node-roles');
+                const data = await response.json();
 
-            if (data.channels) {
-                const select = document.getElementById('primary_channel');
-                const allOption = select.querySelector('option[value=""]');
-                select.innerHTML = '';
-                select.appendChild(allOption);
+                if (data.node_roles) {
+                    const select = document.getElementById('role');
+                    // Keep the "All Roles" option
+                    const allOption = select.querySelector('option[value=""]');
+                    select.innerHTML = '';
+                    select.appendChild(allOption);
 
-                data.channels.forEach((ch) => {
-                    const option = document.createElement('option');
-                    option.value = ch;
-                    option.textContent = ch;
-                    select.appendChild(option);
-                });
+                    // Add role options
+                    data.node_roles.forEach(([value, displayName]) => {
+                        const option = document.createElement('option');
+                        option.value = value;
+                        option.textContent = displayName;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading node roles:', error);
             }
-        } catch (error) {
-            console.error('Error loading channels:', error);
         }
-    }
 
-    // ------------------------------------------------------------------
-    // Fetch ALL node data once and keep it client-side for filtering
-    // ------------------------------------------------------------------
-    let allNodeData = [];
+        // Load primary channels from API
+        async function loadPrimaryChannels() {
+            try {
+                const response = await fetch('/api/meshtastic/channels');
+                const data = await response.json();
 
-    async function fetchAllNodes() {
-        try {
-            // Fetch up to 10k nodes in a single request – more than enough for typical deployments
-            const response = await fetch('/api/nodes/data?limit=10000&page=1');
-            const json = await response.json();
-            // The endpoint returns an object with a "data" property
-            allNodeData = json.data || [];
-        } catch (err) {
-            console.error('Error fetching all node data:', err);
-            allNodeData = [];
+                if (data.channels) {
+                    const select = document.getElementById('primary_channel');
+                    const allOption = select.querySelector('option[value=""]');
+                    select.innerHTML = '';
+                    select.appendChild(allOption);
+
+                    data.channels.forEach((ch) => {
+                        const option = document.createElement('option');
+                        option.value = ch;
+                        option.textContent = ch;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading channels:', error);
+            }
         }
-    }
 
-    // Initialize page with filters and load data
-    async function initializePageWithFilters() {
-        // Apply URL parameters
-        const hasParams = await urlManager.applyURLParameters();
+        // ------------------------------------------------------------------
+        // Fetch ALL node data once and keep it client-side for filtering
+        // ------------------------------------------------------------------
+        let allNodeData = [];
 
-        // Initialize the filter controller (after data + UI ready)
-        controller.initialLoad(hasParams);
-    }
+        async function fetchAllNodes() {
+            try {
+                // Fetch up to 10k nodes in a single request – more than enough for typical deployments
+                const response = await fetch('/api/nodes/data?limit=10000&page=1');
+                const json = await response.json();
+                // The endpoint returns an object with a "data" property
+                allNodeData = json.data || [];
+            } catch (err) {
+                console.error('Error fetching all node data:', err);
+                allNodeData = [];
+            }
+        }
 
-    // Load supporting data (hardware models, roles) AND all nodes, then start
-    Promise.all([loadHardwareModels(), loadNodeRoles(), loadPrimaryChannels(), fetchAllNodes()]).then(async () => {
-        initializePageWithFilters();
-    });
+        // Initialize page with filters and load data
+        async function initializePageWithFilters() {
+            // Apply URL parameters
+            const hasParams = await urlManager.applyURLParameters();
 
-    // Initialize the modern table
-    const table = new ModernTable('nodesTable', {
-        endpoint: '/api/nodes/data',
-        enableSearch: false,
-        enablePagination: false,
-        pageSize: 100,
-        deferInitialLoad: true,
-        defaultSort: { column: 'last_packet_str', direction: 'desc' },
-        columns: [
-            {
-                key: 'hex_id',
-                title: 'Node ID',
-                sortable: true,
-                render: (value, row) => {
-                    return `<a href="/node/${row.node_id}" class="text-decoration-none font-monospace" title="View node details">
+            // Initialize the filter controller (after data + UI ready)
+            controller.initialLoad(hasParams);
+        }
+
+        // Load supporting data (hardware models, roles) AND all nodes, then start
+        Promise.all([loadHardwareModels(), loadNodeRoles(), loadPrimaryChannels(), fetchAllNodes()]).then(async () => {
+            initializePageWithFilters();
+        });
+
+        // Initialize the modern table
+        const table = new ModernTable('nodesTable', {
+            endpoint: '/api/nodes/data',
+            enableSearch: false,
+            enablePagination: false,
+            pageSize: 100,
+            deferInitialLoad: true,
+            defaultSort: { column: 'last_packet_str', direction: 'desc' },
+            columns: [
+                {
+                    key: 'hex_id',
+                    title: 'Node ID',
+                    sortable: true,
+                    render: (value, row) => {
+                        return `<a href="/node/${row.node_id}" class="text-decoration-none font-monospace" title="View node details">
                                 <small>${value}</small>
                             </a>`;
-                }
-            },
-            {
-                key: 'node_name',
-                title: 'Name',
-                sortable: true,
-                render: (value, row) => {
-                    const displayName = value || 'Unnamed';
-                    return `<a href="/node/${row.node_id}" class="text-decoration-none" title="View node details">
+                    }
+                },
+                {
+                    key: 'node_name',
+                    title: 'Name',
+                    sortable: true,
+                    render: (value, row) => {
+                        const displayName = value || 'Unnamed';
+                        return `<a href="/node/${row.node_id}" class="text-decoration-none" title="View node details">
                                 ${displayName}
                             </a>`;
-                }
-            },
-            {
-                key: 'hw_model',
-                title: 'Hardware',
-                sortable: true,
-                render: (value, row) => {
-                    if (value && value !== 'Unknown') {
-                        return `<span class="badge bg-info">${value}</span>`;
                     }
-                    return `<span class="badge bg-light text-dark">Unknown</span>`;
-                }
-            },
-            {
-                key: 'role',
-                title: 'Role',
-                sortable: true,
-                render: (value, row) => {
-                    if (value && value !== 'Unknown') {
-                        let badgeClass = 'bg-secondary';
-                        if (value === 'CLIENT') badgeClass = 'bg-primary';
-                        else if (value === 'ROUTER') badgeClass = 'bg-success';
-                        else if (value === 'ROUTER_LATE') badgeClass = 'bg-success';
-                        else if (value === 'REPEATER') badgeClass = 'bg-warning';
-                        else if (value === 'CLIENT_MUTE') badgeClass = 'bg-secondary';
-                        else if (value === 'CLIENT_BASE') badgeClass = 'bg-secondary';
-                        else if (value === 'ROUTER_CLIENT') badgeClass = 'bg-info';
-                        else if (value === 'SENSOR') badgeClass = 'bg-dark';
+                },
+                {
+                    key: 'hw_model',
+                    title: 'Hardware',
+                    sortable: true,
+                    render: (value, row) => {
+                        if (value && value !== 'Unknown') {
+                            return `<span class="badge bg-info">${value}</span>`;
+                        }
+                        return `<span class="badge bg-light text-dark">Unknown</span>`;
+                    }
+                },
+                {
+                    key: 'role',
+                    title: 'Role',
+                    tooltip: 'Device role (CLIENT, ROUTER, REPEATER, etc.)',
+                    sortable: true,
+                    render: (value, row) => {
+                        if (value && value !== 'Unknown') {
+                            let badgeClass = 'bg-secondary';
+                            if (value === 'CLIENT') badgeClass = 'bg-primary';
+                            else if (value === 'ROUTER') badgeClass = 'bg-success';
+                            else if (value === 'ROUTER_LATE') badgeClass = 'bg-success';
+                            else if (value === 'REPEATER') badgeClass = 'bg-warning';
+                            else if (value === 'CLIENT_MUTE') badgeClass = 'bg-secondary';
+                            else if (value === 'CLIENT_BASE') badgeClass = 'bg-secondary';
+                            else if (value === 'ROUTER_CLIENT') badgeClass = 'bg-info';
+                            else if (value === 'SENSOR') badgeClass = 'bg-dark';
 
-                        return `<span class="badge ${badgeClass}">${value}</span>`;
+                            return `<span class="badge ${badgeClass}">${value}</span>`;
+                        }
+                        return `<span class="badge bg-light text-dark">Unknown</span>`;
                     }
-                    return `<span class="badge bg-light text-dark">Unknown</span>`;
-                }
-            },
-            {
-                key: 'last_packet_str',
-                title: 'Last Seen',
-                sortable: true,
-                sortKey: 'last_packet_time',
-                render: (value, row) => {
-                    if (value && value !== 'Never') {
-                        // Use last_packet_time (unix timestamp) if available, otherwise use value (pre-formatted string)
-                        const timestamp = row.last_packet_time || value;
-                        const formatted = formatTimestamp(timestamp);
-                        return `<small class="timestamp-display" data-timestamp="${timestamp}">${formatted}</small>`;
+                },
+                {
+                    key: 'last_packet_str',
+                    title: 'Last Seen',
+                    tooltip: 'Time since last packet received from this node',
+                    sortable: true,
+                    sortKey: 'last_packet_time',
+                    render: (value, row) => {
+                        if (value && value !== 'Never') {
+                            // Use last_packet_time (unix timestamp) if available, otherwise use value (pre-formatted string)
+                            const timestamp = row.last_packet_time || value;
+                            const formatted = formatTimestamp(timestamp);
+                            return `<small class="timestamp-display" data-timestamp="${timestamp}">${formatted}</small>`;
+                        }
+                        return `<span class="text-muted">Never</span>`;
                     }
-                    return `<span class="text-muted">Never</span>`;
-                }
-            },
-            {
-                key: 'packet_count_24h',
-                title: '24h Activity',
-                sortable: true,
-                render: (value, row) => {
-                    const count = parseInt(value) || 0;
-                    if (count > 0) {
-                        let badgeClass = 'bg-success';
-                        if (count < 10) badgeClass = 'bg-warning';
-                        else if (count < 50) badgeClass = 'bg-info';
+                },
+                {
+                    key: 'packet_count_24h',
+                    title: '24h Activity',
+                    tooltip: 'Number of packets received in the last 24 hours',
+                    sortable: true,
+                    render: (value, row) => {
+                        const count = parseInt(value) || 0;
+                        if (count > 0) {
+                            let badgeClass = 'bg-success';
+                            if (count < 10) badgeClass = 'bg-warning';
+                            else if (count < 50) badgeClass = 'bg-info';
 
-                        return `<span class="badge ${badgeClass}">${count}</span>`;
+                            return `<span class="badge ${badgeClass}">${count}</span>`;
+                        }
+                        return `<span class="badge bg-light text-dark">0</span>`;
                     }
-                    return `<span class="badge bg-light text-dark">0</span>`;
-                }
-            },
-            {
-                key: 'primary_channel',
-                title: 'Channel',
-                sortable: true,
-                render: (value) => {
-                    return value ? `<span class="badge bg-secondary">${value}</span>` : '<span class="text-muted">Unknown</span>';
-                }
-            },
-            {
-                key: 'node_id',
-                title: 'Actions',
-                sortable: false,
-                render: (value, row) => {
-                    // Create filtered URLs using the URL manager
-                    const packetsUrl = urlManager.createFilteredURL('/packets', {
-                        from_node: value
-                    });
-                    const tracerouteUrl = urlManager.createFilteredURL('/traceroute', {
-                        from_node: value
-                    });
+                },
+                {
+                    key: 'primary_channel',
+                    title: 'Channel',
+                    tooltip: 'Primary LoRa channel name',
+                    sortable: true,
+                    render: (value) => {
+                        return value ? `<span class="badge bg-secondary">${value}</span>` : '<span class="text-muted">Unknown</span>';
+                    }
+                },
+                {
+                    key: 'node_id',
+                    title: 'Actions',
+                    sortable: false,
+                    render: (value, row) => {
+                        // Create filtered URLs using the URL manager
+                        const packetsUrl = urlManager.createFilteredURL('/packets', {
+                            from_node: value
+                        });
+                        const tracerouteUrl = urlManager.createFilteredURL('/traceroute', {
+                            from_node: value
+                        });
 
-                    return `
+                        return `
                         <div class="btn-group" role="group">
                             <a href="/node/${value}"
                                class="btn btn-sm btn-outline-primary" title="View node details">
@@ -370,125 +389,153 @@ document.addEventListener('DOMContentLoaded', function() {
                                 <i class="bi bi-diagram-3"></i>
                             </a>
                         </div>`;
+                    }
                 }
+            ]
+        });
+
+        // We no longer paginate or infinite-scroll; the whole dataset will be rendered at once.
+
+        // ------------------------------------------------------------------
+        // Override ModernTable logic – perform all processing client-side
+        // ------------------------------------------------------------------
+        table.loadData = async function () {
+            // If dataset not yet available (should not happen after initial Promise), fetch it now
+            if (allNodeData.length === 0) {
+                await fetchAllNodes();
             }
-        ]
-    });
 
-    // We no longer paginate or infinite-scroll; the whole dataset will be rendered at once.
+            this.state.loading = true;
+            // Only show loading spinner when first page loads
+            if (this.state.page === 1) this.showLoading();
 
-    // ------------------------------------------------------------------
-    // Override ModernTable logic – perform all processing client-side
-    // ------------------------------------------------------------------
-    table.loadData = async function() {
-        // If dataset not yet available (should not happen after initial Promise), fetch it now
-        if (allNodeData.length === 0) {
-            await fetchAllNodes();
-        }
+            try {
+                // Start with full dataset
+                let filtered = [...allNodeData];
+                const filters = this.state.filters || {};
 
-        this.state.loading = true;
-        // Only show loading spinner when first page loads
-        if (this.state.page === 1) this.showLoading();
+                // --- Search filter -------------------------------------------------
+                const searchQuery = (filters.search || '').toString().trim().toLowerCase();
+                if (searchQuery) {
+                    filtered = filtered.filter((n) => {
+                        const haystack = [
+                            n.node_name,
+                            n.long_name,
+                            n.short_name,
+                            n.hex_id,
+                            n.hw_model,
+                            n.role
+                        ].map(v => (v || '').toString().toLowerCase()).join(' ');
+                        return haystack.includes(searchQuery);
+                    });
+                }
 
-        try {
-            // Start with full dataset
-            let filtered = [...allNodeData];
-            const filters = this.state.filters || {};
+                // --- Role filter ---------------------------------------------------
+                if (filters.role) filtered = filtered.filter((n) => n.role === filters.role);
+                // --- Hardware model filter ----------------------------------------
+                if (filters.hw_model) filtered = filtered.filter((n) => n.hw_model === filters.hw_model);
+                // --- Primary channel filter --------------------------------------
+                if (filters.primary_channel) filtered = filtered.filter((n) => n.primary_channel === filters.primary_channel);
+                // --- Active only ---------------------------------------------------
+                if (filters.active_only === true || filters.active_only === '1') {
+                    filtered = filtered.filter((n) => (n.packet_count_24h || 0) > 0);
+                }
+                // --- Named only ----------------------------------------------------
+                if (filters.named_only === true || filters.named_only === '1') {
+                    filtered = filtered.filter((n) => (n.long_name || n.short_name));
+                }
 
-            // --- Search filter -------------------------------------------------
-            const searchQuery = (filters.search || '').toString().trim().toLowerCase();
-            if (searchQuery) {
-                filtered = filtered.filter((n) => {
-                    const haystack = [
-                        n.node_name,
-                        n.long_name,
-                        n.short_name,
-                        n.hex_id,
-                        n.hw_model,
-                        n.role
-                    ].map(v => (v || '').toString().toLowerCase()).join(' ');
-                    return haystack.includes(searchQuery);
+                // --- Sorting -------------------------------------------------------
+                if (!this.state.sortBy) {
+                    this.state.sortBy = 'last_packet_time';
+                    this.state.sortOrder = 'desc';
+                }
+                const dir = this.state.sortOrder === 'asc' ? 1 : -1;
+                const key = this.state.sortBy;
+                filtered.sort((a, b) => {
+                    const av = a[key] ?? '';
+                    const bv = b[key] ?? '';
+                    return av < bv ? -1 * dir : (av > bv ? 1 * dir : 0);
                 });
-            }
 
-            // --- Role filter ---------------------------------------------------
-            if (filters.role) filtered = filtered.filter((n) => n.role === filters.role);
-            // --- Hardware model filter ----------------------------------------
-            if (filters.hw_model) filtered = filtered.filter((n) => n.hw_model === filters.hw_model);
-            // --- Primary channel filter --------------------------------------
-            if (filters.primary_channel) filtered = filtered.filter((n) => n.primary_channel === filters.primary_channel);
-            // --- Active only ---------------------------------------------------
-            if (filters.active_only === true || filters.active_only === '1') {
-                filtered = filtered.filter((n) => (n.packet_count_24h || 0) > 0);
-            }
-            // --- Named only ----------------------------------------------------
-            if (filters.named_only === true || filters.named_only === '1') {
-                filtered = filtered.filter((n) => (n.long_name || n.short_name));
-            }
+                // --- Render entire dataset (no pagination) -------------------------
+                this.state.totalCount = filtered.length;
+                this.state.data = filtered;
+                this.renderTableBody();
 
-            // --- Sorting -------------------------------------------------------
-            if (!this.state.sortBy) {
-                this.state.sortBy = 'last_packet_time';
-                this.state.sortOrder = 'desc';
+                this.emit('dataLoaded', { data: this.state.data, totalCount: this.state.totalCount });
+            } catch (error) {
+                console.error('Error processing node data locally:', error);
+                this.showError(error.message || 'Failed to process data');
+            } finally {
+                this.state.loading = false;
             }
-            const dir = this.state.sortOrder === 'asc' ? 1 : -1;
-            const key = this.state.sortBy;
-            filtered.sort((a, b) => {
-                const av = a[key] ?? '';
-                const bv = b[key] ?? '';
-                return av < bv ? -1 * dir : (av > bv ? 1 * dir : 0);
-            });
+        };
 
-            // --- Render entire dataset (no pagination) -------------------------
-            this.state.totalCount = filtered.length;
-            this.state.data = filtered;
-            this.renderTableBody();
-
-            this.emit('dataLoaded', { data: this.state.data, totalCount: this.state.totalCount });
-        } catch (error) {
-            console.error('Error processing node data locally:', error);
-            this.showError(error.message || 'Failed to process data');
-        } finally {
-            this.state.loading = false;
+        // Update stats function (removed - stats section was removed from UI)
+        function updateStats() {
+            // No-op - stats section removed
         }
-    };
 
-    // Update stats function (removed - stats section was removed from UI)
-    function updateStats() {
-        // No-op - stats section removed
-    }
+        // Initialize the filter controller
+        const controller = new TableFilterController({
+            table,
+            urlManager,
+            formSelector: '#filtersForm',
+            updateStats
+        });
 
-    // Initialize the filter controller
-    const controller = new TableFilterController({
-        table,
-        urlManager,
-        formSelector: '#filtersForm',
-        updateStats
-    });
+        // Expose controller methods to global scope for testing/debugging
+        window.applyCurrentFilters = () => controller.applyCurrentFilters();
+        window.controller = controller;
 
-    // Expose controller methods to global scope for testing/debugging
-    window.applyCurrentFilters = () => controller.applyCurrentFilters();
-    window.controller = controller;
+        // Button handlers
+        const applyFiltersBtn = document.getElementById('applyFilters');
+        const clearFiltersBtn = document.getElementById('clearFilters');
+        const refreshBtn = document.getElementById('refreshTable');
 
-    // Button handlers
-    const applyFiltersBtn = document.getElementById('applyFilters');
-    const clearFiltersBtn = document.getElementById('clearFilters');
-    const refreshBtn = document.getElementById('refreshTable');
+        applyFiltersBtn.addEventListener('click', () => controller.applyCurrentFilters());
+        clearFiltersBtn.addEventListener('click', () => controller.clearFilters());
+        refreshBtn.addEventListener('click', () => {
+            table.refresh();
+        });
 
-    applyFiltersBtn.addEventListener('click', () => controller.applyCurrentFilters());
-    clearFiltersBtn.addEventListener('click', () => controller.clearFilters());
-    refreshBtn.addEventListener('click', () => {
-        table.refresh();
-    });
+        // Export handlers
+        document.getElementById('exportCSV').addEventListener('click', (e) => {
+            e.preventDefault();
+            exportData('csv');
+        });
 
-    // Initialize tooltips after table loads
-    table.on('dataLoaded', function() {
-        // Initialize Bootstrap tooltips
-        const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-        tooltipTriggerList.map(function (tooltipTriggerEl) {
-            return new bootstrap.Tooltip(tooltipTriggerEl);
+        document.getElementById('exportJSON').addEventListener('click', (e) => {
+            e.preventDefault();
+            exportData('json');
+        });
+
+        function exportData(format) {
+            // Build query parameters from current filters
+            const formData = new FormData(document.querySelector('#filtersForm'));
+            const params = new URLSearchParams();
+
+            // Add form data
+            for (const [key, value] of formData.entries()) {
+                if (value) params.append(key, value);
+            }
+
+            // Add format
+            params.append('format', format);
+
+            // Trigger download
+            window.location.href = `/api/nodes/export?${params.toString()}`;
+        }
+
+        // Initialize tooltips after table loads
+        table.on('dataLoaded', function () {
+            // Initialize Bootstrap tooltips
+            const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            tooltipTriggerList.map(function (tooltipTriggerEl) {
+                return new bootstrap.Tooltip(tooltipTriggerEl);
+            });
         });
     });
-});
 </script>
 {% endblock %}

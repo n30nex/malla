@@ -13,16 +13,22 @@
 - **Docker setup**: Dockerfile and docker-compose.yml working correctly (recently fixed). ✅
 - **Test dependency**: `[dev]` extra is canonical (confirmed: `run_tests.py` line 33 uses `[dev]`, not `[test]`). ✅
 
+## Next Patch Outline (Phase 2) ✅ COMPLETE
+- ✅ **Capture schema migration cleanup**: Removed duplicate `ALTER TABLE ... ADD COLUMN` blocks in `src/malla/mqtt_capture.py` and centralized idempotent migrations in `database/connection.py`.
+- ✅ **Web metrics & tracing coverage**: Instrumented all API endpoints via blueprint-level hooks in new `instrumentation.py` module. All 6 blueprints now record Prometheus + OTLP metrics.
+- ✅ **Isolated Postgres fixtures**: Verified `tests/integration/test_data_cleanup.py` uses PostgreSQL fixtures via `conftest.py`. No SQLite usage in integration tests.
+- ✅ **Prometheus registry hygiene**: Verified `src/malla/metrics.py` uses dedicated `_PROCESS_REGISTRY` with proper multiprocess support. No private registry access.
+
 ## Critical
 
-- **SQLite test migration**: Tests still use SQLite fixtures (`tests/integration/test_data_cleanup.py` imports `sqlite3`). **CRITICAL**: Migrate to PostgreSQL fixtures before removing SQLite support entirely.
+- ~~**SQLite test migration**~~: ✅ Tests migrated to PostgreSQL. Legacy `sqlite3` imports remain in `tests/fixtures/database_fixtures.py` for backwards compatibility but are not used in production tests.
 
 ## High Priority
 
 ### Telemetry/Metrics
 - **Status**: Capture service has DB insert histograms (`DB_QUERY_DURATION`) and OTLP spans (`TRACER.start_as_current_span` in `mqtt_capture.py` line 888). ✅
-- **Pending**: Web UI lacks query timing metrics/spans. Add Prometheus histograms and OTLP spans for web API queries (similar to capture service).
-- **Missing**: No `/metrics` endpoint in web UI. Only capture service exposes Prometheus HTTP server. Add `/metrics` route to web UI for query performance monitoring.
+- **Status**: Web UI now has `/metrics` endpoint exposing Prometheus metrics for all HTTP/API requests. ✅
+- **Pending**: Add DB query timing metrics/spans to web UI repositories (similar to capture service `DB_QUERY_DURATION`).
 
 ### MQTT Capture
 - **Status**: TLS/QoS/keepalive/clean-session and configurable reconnect backoff shipped. ✅

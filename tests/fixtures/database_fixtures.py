@@ -6,10 +6,12 @@ for integration testing of the API endpoints and services.
 """
 
 import logging
-import sqlite3
 import os
 import time
 from typing import Any
+
+import psycopg2
+import sqlite3
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,121 @@ class DatabaseFixtures:
 
         logger.info(
             f"Test database created with {len(self.test_packets) + len(self.test_traceroutes)} packets and {len(self.test_nodes)} nodes"
+        )
+
+    def create_test_database_postgres(self, dsn: str, schema: str | None = None) -> None:
+        """Create and populate a PostgreSQL test database with fixture data."""
+        logger.info("Creating Postgres test database %s (schema=%s)", dsn, schema or "public")
+
+        with psycopg2.connect(dsn) as conn:
+            conn.autocommit = False
+            with conn.cursor() as cursor:
+                if schema:
+                    cursor.execute(f"SET search_path TO {schema}")
+                self._create_schema_postgres(cursor)
+                self._insert_node_info_postgres(cursor)
+                self._insert_packets_postgres(cursor)
+            conn.commit()
+
+    def _create_schema_postgres(self, cursor):
+        """Create the database schema matching the production database (PostgreSQL)."""
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS packet_history (
+                id BIGSERIAL PRIMARY KEY,
+                timestamp DOUBLE PRECISION NOT NULL,
+                topic TEXT NOT NULL,
+                from_node_id BIGINT,
+                to_node_id BIGINT,
+                portnum INTEGER,
+                portnum_name TEXT,
+                gateway_id TEXT,
+                channel_id TEXT,
+                rssi INTEGER,
+                snr DOUBLE PRECISION,
+                hop_limit INTEGER,
+                hop_start INTEGER,
+                payload_length INTEGER,
+                raw_payload BYTEA,
+                mesh_packet_id BIGINT,
+                processed_successfully BOOLEAN DEFAULT TRUE,
+                via_mqtt BOOLEAN,
+                want_ack BOOLEAN,
+                priority INTEGER,
+                delayed INTEGER,
+                channel_index INTEGER,
+                rx_time INTEGER,
+                pki_encrypted BOOLEAN,
+                next_hop BIGINT,
+                relay_node BIGINT,
+                tx_after INTEGER,
+                message_type TEXT,
+                raw_service_envelope BYTEA,
+                parsing_error TEXT
+            )
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS node_info (
+                node_id BIGINT PRIMARY KEY,
+                hex_id TEXT,
+                long_name TEXT,
+                short_name TEXT,
+                hw_model TEXT,
+                role TEXT,
+                primary_channel TEXT,
+                is_licensed BOOLEAN,
+                mac_address TEXT,
+                first_seen DOUBLE PRECISION,
+                last_updated DOUBLE PRECISION,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS forum_topics (
+                id BIGSERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                content TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """
+        )
+
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_packet_history_stats ON packet_history(timestamp, from_node_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_packet_history_gateway_stats ON packet_history(timestamp, gateway_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_packet_history_portnum_time ON packet_history(timestamp, portnum_name)"
+        )
+        cursor.execute(
+            """CREATE INDEX IF NOT EXISTS idx_packet_history_direct_hops
+               ON packet_history(timestamp, from_node_id, gateway_id, hop_start, hop_limit)
+               WHERE hop_start = hop_limit"""
+        )
+        cursor.execute(
+            """CREATE INDEX IF NOT EXISTS idx_packet_history_relay_time
+               ON packet_history(timestamp, relay_node)
+               WHERE relay_node IS NOT NULL AND relay_node != 0"""
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_packet_to_node ON packet_history(to_node_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_packet_portnum ON packet_history(portnum)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_packet_portnum_name ON packet_history(portnum_name)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mesh_packet_id ON packet_history(mesh_packet_id)"
         )
 
     def _create_schema(self, cursor: sqlite3.Cursor):
@@ -156,6 +273,32 @@ class DatabaseFixtures:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_mesh_packet_id ON packet_history(mesh_packet_id)"
         )
+
+    def _insert_node_info_postgres(self, cursor):
+        """Insert node info records (PostgreSQL)."""
+        for node in self.test_nodes:
+            cursor.execute(
+                """
+                INSERT INTO node_info (
+                    node_id, hex_id, long_name, short_name, hw_model, role,
+                    primary_channel, is_licensed, mac_address, first_seen, last_updated
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    node["node_id"],
+                    node["hex_id"],
+                    node["long_name"],
+                    node["short_name"],
+                    node["hw_model"],
+                    node["role"],
+                    node["primary_channel"],
+                    node["is_licensed"],
+                    node["mac_address"],
+                    node["first_seen"],
+                    node["last_updated"],
+                ),
+            )
 
     def create_sample_nodes(self) -> list[dict[str, Any]]:
         """Create test node data with variety of node types."""
@@ -480,6 +623,55 @@ class DatabaseFixtures:
                     pki_encrypted, next_hop, relay_node, tx_after
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
+                (
+                    packet["id"],
+                    packet["timestamp"],
+                    packet["topic"],
+                    packet["from_node_id"],
+                    packet["to_node_id"],
+                    packet["portnum"],
+                    packet["portnum_name"],
+                    packet["gateway_id"],
+                    packet["channel_id"],
+                    packet["rssi"],
+                    packet["snr"],
+                    packet["hop_limit"],
+                    packet["hop_start"],
+                    packet["payload_length"],
+                    packet["raw_payload"],
+                    packet["mesh_packet_id"],
+                    packet["processed_successfully"],
+                    packet.get("via_mqtt"),
+                    packet.get("want_ack"),
+                    packet.get("priority"),
+                    packet.get("delayed"),
+                    packet.get("channel_index"),
+                    packet.get("rx_time"),
+                    packet.get("pki_encrypted"),
+                    packet.get("next_hop"),
+                    packet.get("relay_node"),
+                    packet.get("tx_after"),
+                ),
+            )
+
+    def _insert_packets_postgres(self, cursor):
+        """Insert packet fixture data including traceroutes (PostgreSQL)."""
+        all_packets = self.test_packets + self.test_traceroutes
+        for packet in all_packets:
+            cursor.execute(
+                """
+                INSERT INTO packet_history (
+                    id, timestamp, topic, from_node_id, to_node_id, portnum, portnum_name,
+                    gateway_id, channel_id, rssi, snr, hop_limit, hop_start,
+                    payload_length, raw_payload, mesh_packet_id, processed_successfully,
+                    via_mqtt, want_ack, priority, delayed, channel_index, rx_time,
+                    pki_encrypted, next_hop, relay_node, tx_after
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s
+                )
+                """,
                 (
                     packet["id"],
                     packet["timestamp"],
@@ -1111,7 +1303,7 @@ class DatabaseFixtures:
             base_packet_id = 50000 + i
             timestamp = base_time + 1800 + (i * 180)  # 3 minutes apart
             from_node = 1128074276 + (i % 3)  # Cycle through different source nodes
-            mesh_id = f"multi_gw_{i:03d}"
+            mesh_id = 9_000_000 + i  # Keep mesh_packet_id numeric for Postgres
 
             # Base message
             base_message = f"Multi-gateway broadcast message {i + 1}"

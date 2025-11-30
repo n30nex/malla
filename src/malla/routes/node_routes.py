@@ -8,9 +8,13 @@ from flask import Blueprint, render_template
 
 # Import from the new modular architecture
 from ..database.repositories import NodeRepository
+from ..instrumentation import register_metrics
 
 logger = logging.getLogger(__name__)
 node_bp = Blueprint("node", __name__)
+
+# Register metrics hooks
+register_metrics(node_bp)
 
 
 @node_bp.route("/nodes")

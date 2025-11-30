@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 
 from flask import Flask
 from opentelemetry import trace
@@ -16,13 +15,13 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 logger = logging.getLogger(__name__)
 
 
-def setup_telemetry(app: Optional[Flask], endpoint: str) -> None:
+def setup_telemetry(app: Flask | None, endpoint: str) -> None:
     """
     Configure OpenTelemetry tracing for the application.
 
     This sets up comprehensive instrumentation including:
     - Flask HTTP requests (if *app* is provided)
-    - Psycopg2 database operations (PostgreSQL-only)
+    - Psycopg2 database operations (PostgreSQL)
     - Python logging (with trace context injection)
     - HTTP client requests (via requests library)
     - System metrics (CPU, memory, etc.)
@@ -38,7 +37,9 @@ def setup_telemetry(app: Optional[Flask], endpoint: str) -> None:
     logger.info(f"Setting up OpenTelemetry with OTLP endpoint: {endpoint}")
 
     # Create resource with service name
-    resource = Resource(attributes={SERVICE_NAME: "malla-web" if app else "malla-capture"})
+    resource = Resource(
+        attributes={SERVICE_NAME: "malla-web" if app else "malla-capture"}
+    )
 
     # Setup trace provider
     provider = TracerProvider(resource=resource)

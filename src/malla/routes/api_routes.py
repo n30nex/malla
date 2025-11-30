@@ -5,11 +5,9 @@ API routes for the Meshtastic Mesh Health Web UI
 import json
 import logging
 import time
-from functools import wraps
 from typing import Any
 
-from flask import Blueprint, jsonify, request
-from flask import Response, stream_with_context
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 from opentelemetry import trace
 from psycopg2.extras import RealDictCursor
 
@@ -22,13 +20,19 @@ from ..database import (
     get_db_connection,
 )
 from ..database.connection import put_db_connection
-from ..metrics import API_REQUEST_DURATION, API_REQUESTS_TOTAL
+from ..instrumentation import register_metrics
 from ..models.traceroute import TraceroutePacket
 from ..services.analytics_service import AnalyticsService
 from ..services.location_service import LocationService
 from ..services.meshtastic_service import MeshtasticService
 from ..services.node_service import NodeService
 from ..services.traceroute_service import TracerouteService
+from ..utils.export_utils import (
+    generate_csv,
+    generate_json,
+    get_content_type,
+    get_export_filename,
+)
 from ..utils.node_utils import (
     convert_node_id,
     get_bulk_node_names,
@@ -41,55 +45,11 @@ logger = logging.getLogger(__name__)
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 TRACER = trace.get_tracer(__name__)
 
-
-def instrument_api_endpoint(endpoint_name: str | None = None):
-    """Decorator to instrument API endpoints with metrics and OTLP spans."""
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            # Use function name if endpoint_name not provided
-            ep_name = endpoint_name or func.__name__
-            start_time = time.perf_counter()
-            status = "success"
-
-            with TRACER.start_as_current_span(f"api.{ep_name}") as span:
-                try:
-                    if span:
-                        span.set_attribute("http.route", f"/api/{ep_name}")
-                        span.set_attribute("http.method", request.method)
-
-                    result = func(*args, **kwargs)
-
-                    # Determine status from result
-                    if isinstance(result, tuple) and len(result) == 2:
-                        _, status_code = result
-                        status = "error" if status_code >= 400 else "success"
-                        if span:
-                            span.set_attribute("http.status_code", status_code)
-                    else:
-                        if span:
-                            span.set_attribute("http.status_code", 200)
-
-                    return result
-                except Exception as e:
-                    status = "error"
-                    if span:
-                        span.set_attribute("error", True)
-                        span.set_attribute("error.message", str(e))
-                    raise
-                finally:
-                    duration = time.perf_counter() - start_time
-                    API_REQUEST_DURATION.labels(endpoint=ep_name).observe(duration)
-                    API_REQUESTS_TOTAL.labels(endpoint=ep_name, status=status).inc()
-                    if span:
-                        span.set_attribute("duration_ms", duration * 1000)
-
-        return wrapper
-    return decorator
+# Register metrics hooks
+register_metrics(api_bp)
 
 
 @api_bp.route("/stats")
-@instrument_api_endpoint("stats")
 def api_stats():
     """API endpoint for dashboard statistics."""
     logger.info("API stats endpoint accessed")
@@ -251,7 +211,6 @@ def api_packets():
 
 
 @api_bp.route("/nodes")
-@instrument_api_endpoint("nodes")
 def api_nodes():
     """API endpoint for node data (with optional search)."""
     logger.info("API nodes endpoint accessed")
@@ -1951,6 +1910,197 @@ def api_packets_data():
     except Exception as e:
         logger.error(f"Error in API packets modern: {e}")
         return jsonify({"error": str(e), "data": [], "total_count": 0}), 500
+
+
+@api_bp.route("/packets/export", methods=["GET"])
+def api_packets_export():
+    """Export packets data to CSV or JSON format with current filters applied."""
+    logger.info("API packets export endpoint accessed")
+    try:
+        # Get export format (csv or json)
+        export_format = request.args.get("format", "csv").lower()
+        if export_format not in ["csv", "json"]:
+            return jsonify({"error": "Invalid format. Use 'csv' or 'json'"}), 400
+
+        # Get all the same filter parameters as /packets/data
+        filters: dict[str, Any] = {}
+
+        # Gateway filter
+        gateway_id_arg = request.args.get("gateway_id")
+        if gateway_id_arg:
+            try:
+                node_id_for_gateway = convert_node_id(gateway_id_arg)
+                filters["gateway_id"] = f"!{node_id_for_gateway:08x}"
+            except ValueError:
+                filters["gateway_id"] = gateway_id_arg
+
+        # Node filters
+        from_node_str = request.args.get("from_node", "").strip()
+        if from_node_str:
+            try:
+                filters["from_node"] = int(from_node_str)
+            except ValueError:
+                pass
+
+        to_node_str = request.args.get("to_node", "").strip()
+        if to_node_str:
+            try:
+                filters["to_node"] = int(to_node_str)
+            except ValueError:
+                pass
+
+        # Packet type filter
+        portnum = request.args.get("portnum", "").strip()
+        if portnum:
+            filters["portnum"] = portnum
+
+        # Signal strength filter
+        min_rssi_str = request.args.get("min_rssi")
+        if min_rssi_str:
+            try:
+                filters["min_rssi"] = int(min_rssi_str)
+            except ValueError:
+                pass
+
+        # Hop count filter
+        hop_count_str = request.args.get("hop_count")
+        if hop_count_str:
+            try:
+                filters["hop_count"] = int(hop_count_str)
+            except ValueError:
+                pass
+
+        # Channel filter
+        primary_channel = request.args.get("primary_channel", "").strip()
+        if primary_channel:
+            filters["primary_channel"] = primary_channel
+
+        # Exclusion filters
+        exclude_from_str = request.args.get("exclude_from", "").strip()
+        if exclude_from_str:
+            try:
+                filters["exclude_from"] = int(exclude_from_str)
+            except ValueError:
+                pass
+
+        exclude_to_str = request.args.get("exclude_to", "").strip()
+        if exclude_to_str:
+            try:
+                filters["exclude_to"] = int(exclude_to_str)
+            except ValueError:
+                pass
+
+        # Time range filters
+        start_time = request.args.get("start_time")
+        end_time = request.args.get("end_time")
+        if start_time:
+            filters["start_time"] = start_time
+        if end_time:
+            filters["end_time"] = end_time
+
+        # Limit exports to 10,000 rows for safety
+        limit = min(int(request.args.get("limit", 10000)), 10000)
+
+        # Fetch data using existing repository
+        packet_repository = PacketRepository()
+        result = packet_repository.get_packets(filters=filters, limit=limit, offset=0)
+        packets_data = result.get("data", [])
+
+        # Generate export
+        if export_format == "csv":
+            content = generate_csv(packets_data)
+            content_type = get_content_type("csv")
+        else:  # json
+            content = generate_json(packets_data)
+            content_type = get_content_type("json")
+
+        # Generate filename
+        filename = get_export_filename("packets", export_format)
+
+        # Return as downloadable file
+        response = Response(content, mimetype=content_type)
+        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+        return response
+
+    except Exception as e:
+        logger.error(f"Error in packets export: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/nodes/export", methods=["GET"])
+def api_nodes_export():
+    """Export nodes data to CSV or JSON format with current filters applied."""
+    logger.info("API nodes export endpoint accessed")
+    try:
+        # Get export format (csv or json)
+        export_format = request.args.get("format", "csv").lower()
+        if export_format not in ["csv", "json"]:
+            return jsonify({"error": "Invalid format. Use 'csv' or 'json'"}), 400
+
+        # Get fil filters matching /nodes/data endpoint
+        filters: dict[str, Any] = {}
+
+        search = request.args.get("search", "").strip()
+        if search:
+            filters["search"] = search
+
+        role = request.args.get("role", "").strip()
+        if role:
+            filters["role"] = role
+
+        hw_model = request.args.get("hw_model", "").strip()
+        if hw_model:
+            filters["hw_model"] = hw_model
+
+        primary_channel = request.args.get("primary_channel", "").strip()
+        if primary_channel:
+            filters["primary_channel"] = primary_channel
+
+        active_only = request.args.get("active_only", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if active_only:
+            filters["active_only"] = True
+
+        named_only = request.args.get("named_only", "").lower() in ("1", "true", "yes")
+        if named_only:
+            filters["named_only"] = True
+
+        # Limit exports to 10,000 rows for safety
+        limit = min(int(request.args.get("limit", 10000)), 10000)
+
+        # Fetch data using existing repository
+        # Use a large limit for export, but respect safety cap
+        result = NodeRepository.get_nodes(
+            limit=limit, offset=0, search=filters.get("search"), filters=filters
+        )
+        nodes_data = result.get("nodes", [])
+
+        # Limit the results
+        if len(nodes_data) > limit:
+            nodes_data = nodes_data[:limit]
+
+        # Generate export
+        if export_format == "csv":
+            content = generate_csv(nodes_data)
+            content_type = get_content_type("csv")
+        else:  # json
+            content = generate_json(nodes_data)
+            content_type = get_content_type("json")
+
+        # Generate filename
+        filename = get_export_filename("nodes", export_format)
+
+        # Return as downloadable file
+        response = Response(content, mimetype=content_type)
+        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+        return response
+
+    except Exception as e:
+        logger.error(f"Error in nodes export: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @api_bp.route("/nodes/data", methods=["GET"])

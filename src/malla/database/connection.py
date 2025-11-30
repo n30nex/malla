@@ -9,7 +9,6 @@ import os
 import threading
 from typing import Any
 
-import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
 
@@ -145,8 +144,71 @@ def init_database() -> None:
 _SCHEMA_MIGRATIONS_DONE: set[str] = set()
 
 
+def _ensure_tables(cursor: Any) -> None:
+    """Ensure required tables exist."""
+    # Table for packet history
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS packet_history (
+            id BIGSERIAL PRIMARY KEY,
+            timestamp DOUBLE PRECISION NOT NULL,
+            topic TEXT NOT NULL,
+            from_node_id BIGINT,
+            to_node_id BIGINT,
+            portnum INTEGER,
+            portnum_name TEXT,
+            gateway_id TEXT,
+            channel_id TEXT,
+            mesh_packet_id BIGINT,
+            rssi INTEGER,
+            snr DOUBLE PRECISION,
+            hop_limit INTEGER,
+            hop_start INTEGER,
+            payload_length INTEGER,
+            raw_payload BYTEA,
+            processed_successfully BOOLEAN DEFAULT TRUE,
+            via_mqtt BOOLEAN,
+            want_ack BOOLEAN,
+            priority INTEGER,
+            delayed INTEGER,
+            channel_index INTEGER,
+            rx_time INTEGER,
+            pki_encrypted BOOLEAN,
+            next_hop BIGINT,
+            relay_node BIGINT,
+            tx_after INTEGER,
+            message_type TEXT,
+            raw_service_envelope BYTEA,
+            parsing_error TEXT
+        )
+        """
+    )
+
+    # Table for node information cache
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS node_info (
+            node_id BIGINT PRIMARY KEY,
+            hex_id TEXT,
+            long_name TEXT,
+            short_name TEXT,
+            hw_model TEXT,
+            role TEXT,
+            primary_channel TEXT,
+            is_licensed BOOLEAN,
+            mac_address TEXT,
+            first_seen DOUBLE PRECISION NOT NULL,
+            last_updated DOUBLE PRECISION NOT NULL
+        )
+        """
+    )
+
+
 def _ensure_schema_migrations(cursor: Any) -> None:
     """Run idempotent schema updates that the application depends on."""
+
+    # Ensure base tables exist first
+    _ensure_tables(cursor)
 
     migrations: dict[str, Any] = {
         "primary_channel": _migration_primary_channel,
@@ -219,7 +281,9 @@ def _migration_primary_channel(cursor: Any) -> None:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_node_primary_channel ON node_info(primary_channel)"
         )
-        logger.info("Added primary_channel column to node_info table via auto-migration")
+        logger.info(
+            "Added primary_channel column to node_info table via auto-migration"
+        )
 
 
 def _migration_bigint_ids(cursor: Any) -> None:
@@ -247,7 +311,23 @@ def _migration_bigint_ids(cursor: Any) -> None:
 
 def _migration_packet_indexes(cursor: Any) -> None:
     """Create helpful indexes used by packet filters."""
+    # Composite indexes for /api/nodes aggregation queries
     index_statements = [
+        "CREATE INDEX IF NOT EXISTS idx_packet_history_stats ON packet_history(timestamp, from_node_id)",
+        "CREATE INDEX IF NOT EXISTS idx_packet_history_gateway_stats ON packet_history(timestamp, gateway_id)",
+        "CREATE INDEX IF NOT EXISTS idx_packet_history_portnum_time ON packet_history(timestamp, portnum_name)",
+        "CREATE INDEX IF NOT EXISTS idx_packet_history_channel ON packet_history(channel_id)",
+        "CREATE INDEX IF NOT EXISTS idx_packet_history_to_node ON packet_history(to_node_id)",
+        "CREATE INDEX IF NOT EXISTS idx_packet_history_gateway_id ON packet_history(gateway_id)",
+        """CREATE INDEX IF NOT EXISTS idx_packet_history_direct_hops
+           ON packet_history(timestamp, from_node_id, gateway_id, hop_start, hop_limit)
+           WHERE hop_start = hop_limit""",
+        """CREATE INDEX IF NOT EXISTS idx_packet_history_relay_time
+           ON packet_history(timestamp, relay_node)
+           WHERE relay_node IS NOT NULL AND relay_node != 0""",
+        "CREATE INDEX IF NOT EXISTS idx_packet_mesh_id ON packet_history(mesh_packet_id)",
+        "CREATE INDEX IF NOT EXISTS idx_node_hex_id ON node_info(hex_id)",
+        # Legacy/Duplicate indexes (kept for compatibility or if names differ)
         "CREATE INDEX IF NOT EXISTS idx_packet_channel_id ON packet_history(channel_id)",
         "CREATE INDEX IF NOT EXISTS idx_packet_gateway_id ON packet_history(gateway_id)",
         "CREATE INDEX IF NOT EXISTS idx_packet_to_node ON packet_history(to_node_id)",
@@ -260,5 +340,11 @@ def _migration_packet_indexes(cursor: Any) -> None:
         except Exception as exc:  # noqa: BLE001
             msg = str(exc).lower()
             if "already exists" in msg or "duplicate" in msg:
+                continue
+            # Handle deadlocks gracefully
+            if "deadlock detected" in msg:
+                logger.warning(
+                    f"Skipped index creation due to deadlock: {stmt[:50]}..."
+                )
                 continue
             raise

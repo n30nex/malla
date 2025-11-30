@@ -7,13 +7,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 from flask import Blueprint, render_template, request
-
 from psycopg2.extras import RealDictCursor
 
 from ..database.connection import get_db_connection, put_db_connection
 
 # Import from the new modular architecture
 from ..database.repositories import LocationRepository, NodeRepository
+from ..instrumentation import register_metrics
 from ..models.traceroute import TraceroutePacket
 from ..utils.node_utils import convert_node_id, get_bulk_node_names
 from ..utils.traceroute_graph import build_combined_traceroute_graph
@@ -21,6 +21,9 @@ from ..utils.traceroute_graph import build_combined_traceroute_graph
 logger = logging.getLogger(__name__)
 
 packet_bp = Blueprint("packet", __name__)
+
+# Register metrics hooks
+register_metrics(packet_bp)
 
 
 def get_packet_details(packet_id: int) -> dict[str, Any] | None:
@@ -472,7 +475,10 @@ def decode_packet_payload(packet: dict[str, Any]) -> dict[str, Any] | None:
             payload_info["decoded"] = True
 
             # Create application-specific data structure based on portnum
-            if packet["portnum_name"] == "POSITION_APP" or packet["portnum_name"] == "MAP_REPORT_APP":
+            if (
+                packet["portnum_name"] == "POSITION_APP"
+                or packet["portnum_name"] == "MAP_REPORT_APP"
+            ):
                 # Convert raw protobuf fields to user-friendly format
                 # Both POSITION_APP and MAP_REPORT_APP contain Position messages
                 raw_data = decoded_payload
@@ -1203,7 +1209,10 @@ def get_raw_packet_analysis(packet: dict[str, Any]) -> dict[str, Any] | None:
             mqtt_privacy["exposure_risks"].append("Packet visible to MQTT subscribers")
 
         # Position privacy analysis for POSITION_APP and MAP_REPORT_APP
-        if packet.get("portnum_name") == "POSITION_APP" or packet.get("portnum_name") == "MAP_REPORT_APP":
+        if (
+            packet.get("portnum_name") == "POSITION_APP"
+            or packet.get("portnum_name") == "MAP_REPORT_APP"
+        ):
             try:
                 position = mesh_pb2.Position()
                 position.ParseFromString(packet["raw_payload"])

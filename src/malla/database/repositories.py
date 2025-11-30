@@ -16,6 +16,7 @@ from psycopg2.extras import RealDictCursor
 from ..utils.formatting import format_time_ago
 from ..utils.node_utils import get_bulk_node_short_names
 from .connection import get_db_connection, put_db_connection
+from .metrics_decorator import track_query_time
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class DashboardRepository:
     """Repository for dashboard statistics."""
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_stats(gateway_id: str | None = None) -> dict[str, Any]:
         """Get overview statistics for the dashboard using optimized single query."""
         logger.info(f"Getting dashboard stats with gateway_id={gateway_id}")
@@ -147,6 +149,7 @@ class PacketRepository:
             return None
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_packets(
         limit: int = 100,
         offset: int = 0,
@@ -613,6 +616,7 @@ class PacketRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_signal_data(filters: dict | None = None) -> list[dict[str, Any]]:
         """Get packet signal quality data."""
         if filters is None:
@@ -666,6 +670,7 @@ class PacketRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_unique_gateway_ids() -> list[str]:
         """Get list of unique gateway IDs."""
         try:

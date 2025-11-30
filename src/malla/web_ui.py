@@ -17,11 +17,11 @@ from flask import Flask
 
 # Import application configuration loader
 from .config import AppConfig, describe_database_target, get_config
-from .logging_utils import setup_logging
 
 # Optional CORS support will be checked inline
 # Import configuration and database setup
 from .database.connection import init_database
+from .logging_utils import setup_logging
 from .routes import register_routes
 
 # Import utility functions for template filters
@@ -92,6 +92,7 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
 
         _override_config(cfg)
     from .config import validate_config
+
     validate_config(cfg)
 
     # Persist config on Flask instance for later use
@@ -246,6 +247,16 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
             "version": "2.0.0",
         }
 
+    # Add Prometheus metrics endpoint
+    @app.route("/metrics")
+    def metrics():
+        """Prometheus metrics endpoint."""
+        from flask import Response
+
+        from .metrics import get_metrics, get_metrics_content_type
+
+        return Response(get_metrics(), content_type=get_metrics_content_type())
+
     # Add application info
     @app.route("/info")
     def app_info():
@@ -263,23 +274,6 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
                 "routes": "HTTP request handling",
             },
         }
-
-    # Add Prometheus metrics endpoint
-    @app.route("/metrics")
-    def metrics():
-        """Prometheus metrics endpoint."""
-        from .metrics import get_metrics, get_metrics_content_type
-        from flask import Response
-
-        try:
-            metrics_output = get_metrics()
-            return Response(
-                metrics_output,
-                mimetype=get_metrics_content_type(),
-            )
-        except Exception as e:
-            logger.error(f"Error generating metrics: {e}")
-            return {"error": str(e)}, 500
 
     logger.info("Flask application created successfully")
     return app

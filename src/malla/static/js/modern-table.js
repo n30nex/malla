@@ -99,36 +99,45 @@ class ModernTable {
         return `
             <tr>
                 ${this.options.columns.map(column => {
-                    const sortable = column.sortable !== false;
-                    const sortKey = column.sortKey || column.key;
-                    const isSorted = this.state.sortBy === sortKey;
+            const sortable = column.sortable !== false;
+            const sortKey = column.sortKey || column.key;
+            const isSorted = this.state.sortBy === sortKey;
 
-                    // Use proper CSS classes for ::after pseudo-element
-                    let sortClass = sortable ? 'sortable' : '';
-                    if (isSorted) {
-                        sortClass += ` ${this.state.sortOrder}`;
-                    }
+            // Use proper CSS classes for ::after pseudo-element
+            let sortClass = sortable ? 'sortable' : '';
+            if (isSorted) {
+                sortClass += ` ${this.state.sortOrder}`;
+            }
 
-                    return `
+            return `
                         <th class="${sortClass}"
                             ${sortable ? `data-sort="${sortKey}"` : ''}>
                             ${column.title}
+                            ${column.tooltip ? `
+                                <i class="bi bi-question-circle text-muted ms-1"
+                                   data-bs-toggle="tooltip"
+                                   data-bs-placement="top"
+                                   title="${column.tooltip}"></i>
+                            ` : ''}
                         </th>
                     `;
-                }).join('')}
+        }).join('')}
             </tr>
         `;
     }
 
     renderLoadingState() {
-        return `
-            <tr>
-                <td colspan="${this.options.columns.length}" class="text-center py-4">
-                    <div class="loading-spinner mx-auto"></div>
-                    <div class="mt-2 text-muted">Loading...</div>
-                </td>
+        const columns = this.options.columns.length;
+        const skeletonRow = `
+            <tr class="skeleton-row">
+                ${Array(columns).fill(0).map(() => `
+                    <td>
+                        <div class="skeleton skeleton-cell"></div>
+                    </td>
+                `).join('')}
             </tr>
         `;
+        return skeletonRow.repeat(5);
     }
 
     renderEmptyState() {
@@ -211,6 +220,12 @@ class ModernTable {
     updateTableHeader() {
         const thead = this.container.querySelector('thead');
         thead.innerHTML = this.renderTableHeader();
+
+        // Initialize tooltips in header
+        const tooltipTriggerList = [].slice.call(thead.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
     }
 
     async loadData() {
@@ -236,8 +251,8 @@ class ModernTable {
             } else {
                 // Fall back to DOM check for backward compatibility
                 const groupingCheckbox = document.getElementById('groupPackets') ||
-                                       document.getElementById('groupTraceroutes') ||
-                                       document.getElementById('group_packets');
+                    document.getElementById('groupTraceroutes') ||
+                    document.getElementById('group_packets');
                 if (groupingCheckbox && groupingCheckbox.checked) {
                     params.set('group_packets', 'true');
                 }

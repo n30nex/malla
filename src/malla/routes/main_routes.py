@@ -10,9 +10,13 @@ from flask import Blueprint, render_template, request
 from ..database.repositories import (
     DashboardRepository,
 )
+from ..instrumentation import register_metrics
 
 logger = logging.getLogger(__name__)
 main_bp = Blueprint("main", __name__)
+
+# Register metrics hooks
+register_metrics(main_bp)
 
 
 @main_bp.route("/")

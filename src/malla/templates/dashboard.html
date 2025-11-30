@@ -29,7 +29,9 @@
             <div class="card h-100">
                 <div class="card-body card-metric">
                     <div class="metric-value">{{ stats.total_nodes }}</div>
-                    <div class="metric-label">Total Nodes</div>
+                    <div class="metric-label" data-bs-toggle="tooltip"
+                        title="Total number of unique nodes ever seen by the network">Total Nodes <i
+                            class="bi bi-info-circle-fill text-muted small"></i></div>
                     <small class="text-muted">Known mesh participants</small>
                 </div>
             </div>
@@ -38,7 +40,9 @@
             <div class="card h-100">
                 <div class="card-body card-metric">
                     <div class="metric-value text-success">{{ stats.active_nodes_24h }}</div>
-                    <div class="metric-label">Active Nodes (24h)</div>
+                    <div class="metric-label" data-bs-toggle="tooltip"
+                        title="Nodes that have sent a packet in the last 24 hours">Active Nodes (24h) <i
+                            class="bi bi-info-circle-fill text-muted small"></i></div>
                     {% set total_nodes_safe = stats.total_nodes if stats.total_nodes > 0 else 1 %}
                     {% set coverage_pct = (stats.active_nodes_24h / total_nodes_safe * 100)|int %}
                     <small class="text-muted">{{ coverage_pct }}% network coverage</small>
@@ -49,7 +53,9 @@
             <div class="card h-100">
                 <div class="card-body card-metric">
                     <div class="metric-value text-warning">{{ gateway_count }}</div>
-                    <div class="metric-label">Gateway Diversity</div>
+                    <div class="metric-label" data-bs-toggle="tooltip"
+                        title="Number of unique MQTT gateways reporting data">Gateway Diversity <i
+                            class="bi bi-info-circle-fill text-muted small"></i></div>
                     <small class="text-muted">Data source reliability</small>
                 </div>
             </div>
@@ -58,7 +64,9 @@
             <div class="card h-100">
                 <div class="card-body card-metric">
                     <div class="metric-value text-info">{{ stats.packet_types|length }}</div>
-                    <div class="metric-label">Protocol Diversity</div>
+                    <div class="metric-label" data-bs-toggle="tooltip"
+                        title="Number of distinct Meshtastic portnums (protocols) observed">Protocol Diversity <i
+                            class="bi bi-info-circle-fill text-muted small"></i></div>
                     <small class="text-muted">Message types in use</small>
                 </div>
             </div>
@@ -67,7 +75,9 @@
             <div class="card h-100">
                 <div class="card-body card-metric">
                     <div class="metric-value">{{ "{:,}".format(stats.total_packets) }}</div>
-                    <div class="metric-label">Total Messages</div>
+                    <div class="metric-label" data-bs-toggle="tooltip"
+                        title="Total number of packets stored in the database">Total Messages <i
+                            class="bi bi-info-circle-fill text-muted small"></i></div>
                     <small class="text-muted">Network activity</small>
                 </div>
             </div>
@@ -75,9 +85,12 @@
         <div class="col-md-2">
             <div class="card h-100">
                 <div class="card-body card-metric">
-                    {% set success_class = 'text-success' if stats.success_rate >= 95 else 'text-warning' if stats.success_rate >= 85 else 'text-danger' %}
+                    {% set success_class = 'text-success' if stats.success_rate >= 95 else 'text-warning' if
+                    stats.success_rate >= 85 else 'text-danger' %}
                     <div class="metric-value {{ success_class }}">{{ stats.success_rate }}%</div>
-                    <div class="metric-label">Processing Success</div>
+                    <div class="metric-label" data-bs-toggle="tooltip"
+                        title="Percentage of packets successfully decoded and processed">Processing Success <i
+                            class="bi bi-info-circle-fill text-muted small"></i></div>
                     <small class="text-muted">Message reliability</small>
                 </div>
             </div>
@@ -90,15 +103,11 @@
         <div class="col-md-8 mb-4">
             <div class="card h-100">
                 <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-graph-up-arrow"></i> Network Activity Trends (7 Days)</h5>
+                    <h5 class="card-title mb-0"><i class="bi bi-graph-up-arrow"></i> Network Activity Trends (7 Days)
+                    </h5>
                 </div>
                 <div class="card-body">
-                    <div id="timeSeriesChartLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                        <p class="mt-2 text-muted">Loading chart data...</p>
-                    </div>
+                    <div id="timeSeriesChartLoading" class="skeleton skeleton-chart"></div>
                     <canvas id="timeSeriesChart" style="height: 300px; display: none;"></canvas>
                 </div>
             </div>
@@ -116,18 +125,21 @@
                         <div class="progress mb-2">
                             {% set total_nodes_safe = stats.total_nodes if stats.total_nodes > 0 else 1 %}
                             {% set activity_percentage = (stats.active_nodes_24h / total_nodes_safe * 100)|int %}
-                            {% set coverage_class = 'bg-success' if activity_percentage >= 70 else 'bg-warning' if activity_percentage >= 40 else 'bg-danger' %}
+                            {% set coverage_class = 'bg-success' if activity_percentage >= 70 else 'bg-warning' if
+                            activity_percentage >= 40 else 'bg-danger' %}
                             <div class="progress-bar {{ coverage_class }}" style="width: {{ activity_percentage }}%;">
                                 {{ activity_percentage }}%
                             </div>
                         </div>
-                        <small class="text-muted">{{ stats.active_nodes_24h }} of {{ stats.total_nodes }} nodes active</small>
+                        <small class="text-muted">{{ stats.active_nodes_24h }} of {{ stats.total_nodes }} nodes
+                            active</small>
                     </div>
 
                     <div class="mb-3">
                         <h6>Message Success Rate</h6>
                         <div class="progress mb-2">
-                            {% set success_bar_class = 'bg-success' if stats.success_rate >= 95 else 'bg-warning' if stats.success_rate >= 85 else 'bg-danger' %}
+                            {% set success_bar_class = 'bg-success' if stats.success_rate >= 95 else 'bg-warning' if
+                            stats.success_rate >= 85 else 'bg-danger' %}
                             <div class="progress-bar {{ success_bar_class }}" style="width: {{ stats.success_rate }}%;">
                                 {{ stats.success_rate }}%
                             </div>
@@ -139,667 +151,654 @@
                         <h6>Gateway Diversity</h6>
                         <div class="progress mb-2">
                             {% set gateway_diversity = (gateway_count / 10 * 100)|int if gateway_count <= 10 else 100 %}
-                            <div class="progress-bar bg-primary" style="width: {{ gateway_diversity }}%;">
+                                <div class="progress-bar bg-primary" style="width: {{ gateway_diversity }}%;">
                                 {{ gateway_count }} sources
-                            </div>
                         </div>
-                        <small class="text-muted">Multiple data sources improve reliability</small>
                     </div>
+                    <small class="text-muted">Multiple data sources improve reliability</small>
+                </div>
 
-                    <hr>
+                <hr>
 
-                    <div class="row text-center">
-                        <div class="col-6">
-                            <div class="border-end">
-                                <div class="fw-bold text-primary">{{ stats.recent_packets }}</div>
-                                <small class="text-muted">Recent Activity</small>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="fw-bold text-success">{{ stats.packet_types|length }}</div>
-                            <small class="text-muted">Protocol Types</small>
+                <div class="row text-center">
+                    <div class="col-6">
+                        <div class="border-end">
+                            <div class="fw-bold text-primary">{{ stats.recent_packets }}</div>
+                            <small class="text-muted">Recent Activity</small>
                         </div>
                     </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Signal Quality and Activity Charts Row -->
-    <div class="row mb-4">
-        <!-- Active Nodes Distribution -->
-        <div class="col-md-4 mb-4">
-            <div class="card h-100">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-people"></i> Node Activity Distribution</h5>
-                </div>
-                <div class="card-body">
-                    <div id="nodeActivityChartLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                    </div>
-                    <canvas id="nodeActivityChart" style="height: 300px; display: none;"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <!-- Active Gateways Distribution -->
-        <div class="col-md-4 mb-4">
-            <div class="card h-100">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-router-fill"></i> Gateway Activity Distribution</h5>
-                </div>
-                <div class="card-body">
-                    <div id="gatewayActivityChartLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                    </div>
-                    <canvas id="gatewayActivityChart" style="height: 300px; display: none;"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <!-- Signal Quality Distribution -->
-        <div class="col-md-4 mb-4">
-            <div class="card h-100">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-reception-4"></i> Signal Quality Distribution</h5>
-                </div>
-                <div class="card-body">
-                    <div id="signalDistributionChartLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                    </div>
-                    <canvas id="signalDistributionChart" style="height: 300px; display: none;"></canvas>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Message Routing and Protocol Usage Row -->
-    <div class="row mb-4">
-        <!-- Hop Count Distribution -->
-        <div class="col-md-6 mb-4">
-            <div class="card h-100">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-router"></i> Message Routing Patterns</h5>
-                </div>
-                <div class="card-body">
-                    <div id="hopDistributionChartLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                    </div>
-                    <canvas id="hopDistributionChart" style="height: 300px; display: none;"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <!-- Protocol Usage -->
-        <div class="col-md-6 mb-4">
-            <div class="card h-100">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-pie-chart"></i> Protocol Usage (24h)</h5>
-                </div>
-                <div class="card-body">
-                    {% if stats.packet_types %}
-                    <div id="packetTypesChartLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                    </div>
-                    <canvas id="packetTypesChart" style="height: 300px; display: none;"></canvas>
-                    {% else %}
-                    <div class="text-center text-muted py-4">
-                        <i class="bi bi-inbox" style="font-size: 3rem;"></i>
-                        <p class="mt-2">No packet data available</p>
-                    </div>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Top Active Nodes Row -->
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-trophy"></i> Most Active Nodes</h5>
-                </div>
-                <div class="card-body">
-                    <div id="topNodesLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                    </div>
-                    <div class="table-responsive" style="display: none;" id="topNodesTableContainer">
-                        <table class="table table-sm" id="topNodesTable">
-                            <thead>
-                                <tr>
-                                    <th>Node</th>
-                                    <th>Messages</th>
-                                    <th>Signal</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <!-- Data will be populated by JavaScript -->
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Network Information Cards -->
-    <div class="row mb-4">
-        <div class="col-md-4">
-            <div class="card">
-                <div class="card-header">
-                    <h6 class="card-title mb-0"><i class="bi bi-info-circle"></i> Network Information</h6>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <strong>Total Nodes:</strong><br>
-                            <span class="text-primary">{{ stats.total_nodes }}</span>
-                        </div>
-                        <div class="col-6">
-                            <strong>Active (24h):</strong><br>
-                            <span class="text-success">{{ stats.active_nodes_24h }}</span>
-                        </div>
-                    </div>
-                    <hr>
-                    <div class="row">
-                        <div class="col-6">
-                            <strong>Gateways:</strong><br>
-                            <span class="text-warning">{{ gateway_count }}</span>
-                        </div>
-                        <div class="col-6">
-                            <strong>Protocols:</strong><br>
-                            <span class="text-info">{{ stats.packet_types|length }}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-md-4">
-            <div class="card">
-                <div class="card-header">
-                    <h6 class="card-title mb-0"><i class="bi bi-activity"></i> Activity Summary</h6>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <strong>Total Messages:</strong><br>
-                            <span class="text-primary">{{ "{:,}".format(stats.total_packets) }}</span>
-                        </div>
-                        <div class="col-6">
-                            <strong>Recent (1h):</strong><br>
-                            <span class="text-success">{{ stats.recent_packets }}</span>
-                        </div>
-                    </div>
-                    <hr>
-                    <div class="row">
-                        <div class="col-12">
-                            <strong>Success Rate:</strong><br>
-                            {% set success_class = 'text-success' if stats.success_rate >= 95 else 'text-warning' if stats.success_rate >= 85 else 'text-danger' %}
-                            <span class="{{ success_class }}">{{ stats.success_rate }}%</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-md-4">
-            <div class="card">
-                <div class="card-header">
-                    <h6 class="card-title mb-0"><i class="bi bi-reception-4"></i> Signal Quality</h6>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <strong>Avg RSSI:</strong><br>
-                            <span class="text-primary">{{ stats.avg_rssi|format_rssi }}dBm</span>
-                        </div>
-                        <div class="col-6">
-                            <strong>Avg SNR:</strong><br>
-                            <span class="text-success">{{ stats.avg_snr|format_snr }}dB</span>
-                        </div>
-                    </div>
-                    <hr>
-                    <div class="row">
-                        <div class="col-12">
-                            <strong>Network Health:</strong><br>
-                            {% set total_nodes_safe = stats.total_nodes if stats.total_nodes > 0 else 1 %}
-                            {% set activity_percentage = (stats.active_nodes_24h / total_nodes_safe * 100)|int %}
-                            {% if activity_percentage >= 70 %}
-                                <span class="text-success">Excellent</span>
-                            {% elif activity_percentage >= 40 %}
-                                <span class="text-warning">Good</span>
-                            {% else %}
-                                <span class="text-danger">Needs Attention</span>
-                            {% endif %}
-                        </div>
+                    <div class="col-6">
+                        <div class="fw-bold text-success">{{ stats.packet_types|length }}</div>
+                        <small class="text-muted">Protocol Types</small>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 </div>
+
+<!-- Signal Quality and Activity Charts Row -->
+<div class="row mb-4">
+    <!-- Active Nodes Distribution -->
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-people"></i> Node Activity Distribution</h5>
+            </div>
+            <div class="card-body">
+                <div id="nodeActivityChartLoading" class="skeleton skeleton-chart"></div>
+                <canvas id="nodeActivityChart" style="height: 300px; display: none;"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Gateways Distribution -->
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-router-fill"></i> Gateway Activity Distribution</h5>
+            </div>
+            <div class="card-body">
+                <div id="gatewayActivityChartLoading" class="skeleton skeleton-chart"></div>
+                <canvas id="gatewayActivityChart" style="height: 300px; display: none;"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Signal Quality Distribution -->
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-reception-4"></i> Signal Quality Distribution</h5>
+            </div>
+            <div class="card-body">
+                <div id="signalDistributionChartLoading" class="skeleton skeleton-chart"></div>
+                <canvas id="signalDistributionChart" style="height: 300px; display: none;"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Message Routing and Protocol Usage Row -->
+<div class="row mb-4">
+    <!-- Hop Count Distribution -->
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-router"></i> Message Routing Patterns</h5>
+            </div>
+            <div class="card-body">
+                <div id="hopDistributionChartLoading" class="skeleton skeleton-chart"></div>
+                <canvas id="hopDistributionChart" style="height: 300px; display: none;"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Protocol Usage -->
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-pie-chart"></i> Protocol Usage (24h)</h5>
+            </div>
+            <div class="card-body">
+                {% if stats.packet_types %}
+                <div id="packetTypesChartLoading" class="skeleton skeleton-chart"></div>
+                <canvas id="packetTypesChart" style="height: 300px; display: none;"></canvas>
+                {% else %}
+                <div class="text-center text-muted py-4">
+                    <i class="bi bi-inbox" style="font-size: 3rem;"></i>
+                    <p class="mt-2">No packet data available</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Top Active Nodes Row -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-trophy"></i> Most Active Nodes</h5>
+            </div>
+            <div class="card-body">
+                <div id="topNodesLoading" class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                </div>
+                <div class="table-responsive" style="display: none;" id="topNodesTableContainer">
+                    <table class="table table-sm" id="topNodesTable">
+                        <thead>
+                            <tr>
+                                <th>Node</th>
+                                <th>Messages</th>
+                                <th>Signal</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Data will be populated by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Network Information Cards -->
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="card-title mb-0"><i class="bi bi-info-circle"></i> Network Information</h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-6">
+                        <strong>Total Nodes:</strong><br>
+                        <span class="text-primary">{{ stats.total_nodes }}</span>
+                    </div>
+                    <div class="col-6">
+                        <strong>Active (24h):</strong><br>
+                        <span class="text-success">{{ stats.active_nodes_24h }}</span>
+                    </div>
+                </div>
+                <hr>
+                <div class="row">
+                    <div class="col-6">
+                        <strong>Gateways:</strong><br>
+                        <span class="text-warning">{{ gateway_count }}</span>
+                    </div>
+                    <div class="col-6">
+                        <strong>Protocols:</strong><br>
+                        <span class="text-info">{{ stats.packet_types|length }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="card-title mb-0"><i class="bi bi-activity"></i> Activity Summary</h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-6">
+                        <strong>Total Messages:</strong><br>
+                        <span class="text-primary">{{ "{:,}".format(stats.total_packets) }}</span>
+                    </div>
+                    <div class="col-6">
+                        <strong>Recent (1h):</strong><br>
+                        <span class="text-success">{{ stats.recent_packets }}</span>
+                    </div>
+                </div>
+                <hr>
+                <div class="row">
+                    <div class="col-12">
+                        <strong>Success Rate:</strong><br>
+                        {% set success_class = 'text-success' if stats.success_rate >= 95 else 'text-warning' if
+                        stats.success_rate >= 85 else 'text-danger' %}
+                        <span class="{{ success_class }}">{{ stats.success_rate }}%</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="card-title mb-0"><i class="bi bi-reception-4"></i> Signal Quality</h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-6">
+                        <strong>Avg RSSI:</strong><br>
+                        <span class="text-primary">{{ stats.avg_rssi|format_rssi }}dBm</span>
+                    </div>
+                    <div class="col-6">
+                        <strong>Avg SNR:</strong><br>
+                        <span class="text-success">{{ stats.avg_snr|format_snr }}dB</span>
+                    </div>
+                </div>
+                <hr>
+                <div class="row">
+                    <div class="col-12">
+                        <strong>Network Health:</strong><br>
+                        {% set total_nodes_safe = stats.total_nodes if stats.total_nodes > 0 else 1 %}
+                        {% set activity_percentage = (stats.active_nodes_24h / total_nodes_safe * 100)|int %}
+                        {% if activity_percentage >= 70 %}
+                        <span class="text-success">Excellent</span>
+                        {% elif activity_percentage >= 40 %}
+                        <span class="text-warning">Good</span>
+                        {% else %}
+                        <span class="text-danger">Needs Attention</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
-// Load analytics data asynchronously to improve initial page load time
-let analyticsData = null;
-let chartInstances = {}; // Store chart instances for theme updates
+    // Load analytics data asynchronously to improve initial page load time
+    let analyticsData = null;
+    let chartInstances = {}; // Store chart instances for theme updates
 
-// Get theme-aware colors for charts
-function getChartColors() {
-    const computedStyle = getComputedStyle(document.documentElement);
-    const isDark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+    // Get theme-aware colors for charts
+    function getChartColors() {
+        const computedStyle = getComputedStyle(document.documentElement);
+        const isDark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
 
-    return {
-        // Text colors
-        textColor: computedStyle.getPropertyValue('--bs-body-color').trim(),
-        mutedTextColor: computedStyle.getPropertyValue('--bs-secondary-color').trim(),
+        return {
+            // Text colors
+            textColor: computedStyle.getPropertyValue('--bs-body-color').trim(),
+            mutedTextColor: computedStyle.getPropertyValue('--bs-secondary-color').trim(),
 
-        // Grid and border colors
-        gridColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-        borderColor: computedStyle.getPropertyValue('--bs-border-color').trim(),
+            // Grid and border colors
+            gridColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+            borderColor: computedStyle.getPropertyValue('--bs-border-color').trim(),
 
-        // Chart colors (theme-aware)
-        primary: computedStyle.getPropertyValue('--bs-primary').trim(),
-        success: computedStyle.getPropertyValue('--bs-success').trim(),
-        info: computedStyle.getPropertyValue('--bs-info').trim(),
-        warning: computedStyle.getPropertyValue('--bs-warning').trim(),
-        danger: computedStyle.getPropertyValue('--bs-danger').trim(),
-        secondary: computedStyle.getPropertyValue('--bs-secondary').trim(),
+            // Chart colors (theme-aware)
+            primary: computedStyle.getPropertyValue('--bs-primary').trim(),
+            success: computedStyle.getPropertyValue('--bs-success').trim(),
+            info: computedStyle.getPropertyValue('--bs-info').trim(),
+            warning: computedStyle.getPropertyValue('--bs-warning').trim(),
+            danger: computedStyle.getPropertyValue('--bs-danger').trim(),
+            secondary: computedStyle.getPropertyValue('--bs-secondary').trim(),
 
-        // Background colors with transparency
-        primaryBg: isDark ? 'rgba(13, 110, 253, 0.2)' : 'rgba(13, 110, 253, 0.1)',
-        successBg: isDark ? 'rgba(25, 135, 84, 0.2)' : 'rgba(25, 135, 84, 0.1)',
-        infoBg: isDark ? 'rgba(13, 202, 240, 0.2)' : 'rgba(13, 202, 240, 0.1)',
-        warningBg: isDark ? 'rgba(255, 193, 7, 0.2)' : 'rgba(255, 193, 7, 0.1)',
-        dangerBg: isDark ? 'rgba(220, 53, 69, 0.2)' : 'rgba(220, 53, 69, 0.1)',
-    };
-}
+            // Background colors with transparency
+            primaryBg: isDark ? 'rgba(13, 110, 253, 0.2)' : 'rgba(13, 110, 253, 0.1)',
+            successBg: isDark ? 'rgba(25, 135, 84, 0.2)' : 'rgba(25, 135, 84, 0.1)',
+            infoBg: isDark ? 'rgba(13, 202, 240, 0.2)' : 'rgba(13, 202, 240, 0.1)',
+            warningBg: isDark ? 'rgba(255, 193, 7, 0.2)' : 'rgba(255, 193, 7, 0.1)',
+            dangerBg: isDark ? 'rgba(220, 53, 69, 0.2)' : 'rgba(220, 53, 69, 0.1)',
+        };
+    }
 
-// Get default chart options with theme support
-function getDefaultChartOptions() {
-    const colors = getChartColors();
+    // Get default chart options with theme support
+    function getDefaultChartOptions() {
+        const colors = getChartColors();
 
-    return {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-            legend: {
-                labels: {
-                    color: colors.textColor
-                }
-            }
-        },
-        scales: {
-            x: {
-                ticks: {
-                    color: colors.mutedTextColor
-                },
-                grid: {
-                    color: colors.gridColor
+        return {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    labels: {
+                        color: colors.textColor
+                    }
                 }
             },
-            y: {
-                ticks: {
-                    color: colors.mutedTextColor
+            scales: {
+                x: {
+                    ticks: {
+                        color: colors.mutedTextColor
+                    },
+                    grid: {
+                        color: colors.gridColor
+                    }
                 },
-                grid: {
-                    color: colors.gridColor
-                },
-                beginAtZero: true
+                y: {
+                    ticks: {
+                        color: colors.mutedTextColor
+                    },
+                    grid: {
+                        color: colors.gridColor
+                    },
+                    beginAtZero: true
+                }
             }
-        }
-    };
-}
+        };
+    }
 
-// Update all charts when theme changes
-function updateChartsForTheme() {
-    if (analyticsData) {
-        // Destroy existing charts
-        Object.values(chartInstances).forEach(chart => {
-            if (chart) chart.destroy();
+    // Update all charts when theme changes
+    function updateChartsForTheme() {
+        if (analyticsData) {
+            // Destroy existing charts
+            Object.values(chartInstances).forEach(chart => {
+                if (chart) chart.destroy();
+            });
+            chartInstances = {};
+
+            // Recreate charts with new theme
+            createTimeSeriesChart(analyticsData.temporal_patterns);
+            createNodeActivityChart(analyticsData.node_statistics);
+            createGatewayActivityChart(analyticsData.gateway_distribution);
+            createSignalDistributionChart(analyticsData.signal_quality);
+            createHopDistributionChart(analyticsData.temporal_patterns);
+            createPacketTypesChart(analyticsData.packet_types);
+        }
+    }
+
+    // Initialize dashboard when page loads
+    document.addEventListener('DOMContentLoaded', function () {
+        // Load analytics data asynchronously
+        loadAnalyticsData();
+
+        // Listen for theme changes and update charts
+        window.addEventListener('themeChanged', function (event) {
+            updateChartsForTheme();
         });
-        chartInstances = {};
 
-        // Recreate charts with new theme
-        createTimeSeriesChart(analyticsData.temporal_patterns);
-        createNodeActivityChart(analyticsData.node_statistics);
-        createGatewayActivityChart(analyticsData.gateway_distribution);
-        createSignalDistributionChart(analyticsData.signal_quality);
-        createHopDistributionChart(analyticsData.temporal_patterns);
-        createPacketTypesChart(analyticsData.packet_types);
+        // Initialize tooltips
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl)
+        })
+    });
+
+    async function loadAnalyticsData() {
+        try {
+            const response = await fetch('/api/analytics');
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            analyticsData = await response.json();
+
+            // Render all charts and tables with loaded data
+            createTimeSeriesChart(analyticsData.temporal_patterns);
+            createNodeActivityChart(analyticsData.node_statistics);
+            createGatewayActivityChart(analyticsData.gateway_distribution);
+            createSignalDistributionChart(analyticsData.signal_quality);
+            createHopDistributionChart(analyticsData.temporal_patterns);
+            createPacketTypesChart(analyticsData.packet_types);
+            populateTopNodesTable(analyticsData.top_nodes);
+
+        } catch (error) {
+            console.error('Error loading analytics data:', error);
+            // Hide loading spinners and show error message
+            hideAllLoadingSpinners();
+            showErrorMessage('Failed to load chart data. Please refresh the page.');
+        }
     }
-}
 
-// Initialize dashboard when page loads
-document.addEventListener('DOMContentLoaded', function () {
-    // Load analytics data asynchronously
-    loadAnalyticsData();
-
-    // Listen for theme changes and update charts
-    window.addEventListener('themeChanged', function(event) {
-        updateChartsForTheme();
-    });
-});
-
-async function loadAnalyticsData() {
-    try {
-        const response = await fetch('/api/analytics');
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        analyticsData = await response.json();
-
-        // Render all charts and tables with loaded data
-        createTimeSeriesChart(analyticsData.temporal_patterns);
-        createNodeActivityChart(analyticsData.node_statistics);
-        createGatewayActivityChart(analyticsData.gateway_distribution);
-        createSignalDistributionChart(analyticsData.signal_quality);
-        createHopDistributionChart(analyticsData.temporal_patterns);
-        createPacketTypesChart(analyticsData.packet_types);
-        populateTopNodesTable(analyticsData.top_nodes);
-
-    } catch (error) {
-        console.error('Error loading analytics data:', error);
-        // Hide loading spinners and show error message
-        hideAllLoadingSpinners();
-        showErrorMessage('Failed to load chart data. Please refresh the page.');
+    function hideLoadingSpinner(chartId) {
+        const loading = document.getElementById(chartId + 'Loading');
+        const chart = document.getElementById(chartId);
+        if (loading) loading.style.display = 'none';
+        if (chart) chart.style.display = 'block';
     }
-}
 
-function hideLoadingSpinner(chartId) {
-    const loading = document.getElementById(chartId + 'Loading');
-    const chart = document.getElementById(chartId);
-    if (loading) loading.style.display = 'none';
-    if (chart) chart.style.display = 'block';
-}
+    function hideAllLoadingSpinners() {
+        const spinners = document.querySelectorAll('[id$="Loading"]');
+        spinners.forEach(spinner => spinner.style.display = 'none');
+    }
 
-function hideAllLoadingSpinners() {
-    const spinners = document.querySelectorAll('[id$="Loading"]');
-    spinners.forEach(spinner => spinner.style.display = 'none');
-}
+    function showErrorMessage(message) {
+        // You could implement a toast notification here
+        console.error(message);
+    }
 
-function showErrorMessage(message) {
-    // You could implement a toast notification here
-    console.error(message);
-}
+    function createTimeSeriesChart(temporalData) {
+        if (!temporalData || !temporalData.hourly_breakdown) return;
 
-function createTimeSeriesChart(temporalData) {
-    if (!temporalData || !temporalData.hourly_breakdown) return;
+        hideLoadingSpinner('timeSeriesChart');
+        const ctx = document.getElementById('timeSeriesChart');
+        if (!ctx) return;
 
-    hideLoadingSpinner('timeSeriesChart');
-    const ctx = document.getElementById('timeSeriesChart');
-    if (!ctx) return;
+        // Convert hourly data to chart format
+        const labels = [];
+        const data = [];
 
-    // Convert hourly data to chart format
-    const labels = [];
-    const data = [];
+        temporalData.hourly_breakdown.forEach(item => {
+            labels.push(`${item.hour}:00`);
+            data.push(item.total_packets);
+        });
 
-    temporalData.hourly_breakdown.forEach(item => {
-        labels.push(`${item.hour}:00`);
-        data.push(item.total_packets);
-    });
+        const colors = getChartColors();
+        const options = getDefaultChartOptions();
 
-    const colors = getChartColors();
-    const options = getDefaultChartOptions();
+        chartInstances.timeSeriesChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Messages per Hour',
+                    data: data,
+                    borderColor: colors.info,
+                    backgroundColor: colors.infoBg,
+                    tension: 0.1
+                }]
+            },
+            options: options
+        });
+    }
 
-    chartInstances.timeSeriesChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: 'Messages per Hour',
-                data: data,
-                borderColor: colors.info,
-                backgroundColor: colors.infoBg,
-                tension: 0.1
-            }]
-        },
-        options: options
-    });
-}
+    function createNodeActivityChart(nodeData) {
+        if (!nodeData || !nodeData.activity_distribution) return;
 
-function createNodeActivityChart(nodeData) {
-    if (!nodeData || !nodeData.activity_distribution) return;
+        hideLoadingSpinner('nodeActivityChart');
+        const ctx = document.getElementById('nodeActivityChart');
+        if (!ctx) return;
 
-    hideLoadingSpinner('nodeActivityChart');
-    const ctx = document.getElementById('nodeActivityChart');
-    if (!ctx) return;
+        const activityDist = nodeData.activity_distribution;
+        const colors = getChartColors();
 
-    const activityDist = nodeData.activity_distribution;
-    const colors = getChartColors();
-
-    chartInstances.nodeActivityChart = new Chart(ctx, {
-        type: 'doughnut',
-        data: {
-            labels: ['Very Active (>100)', 'Moderately Active (10-100)', 'Lightly Active (1-10)', 'Inactive'],
-            datasets: [{
-                data: [
-                    activityDist.very_active || 0,
-                    activityDist.moderately_active || 0,
-                    activityDist.lightly_active || 0,
-                    activityDist.inactive || 0
-                ],
-                backgroundColor: [colors.success, colors.info, colors.warning, colors.danger]
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'bottom',
-                    labels: {
-                        color: colors.textColor
+        chartInstances.nodeActivityChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Very Active (>100)', 'Moderately Active (10-100)', 'Lightly Active (1-10)', 'Inactive'],
+                datasets: [{
+                    data: [
+                        activityDist.very_active || 0,
+                        activityDist.moderately_active || 0,
+                        activityDist.lightly_active || 0,
+                        activityDist.inactive || 0
+                    ],
+                    backgroundColor: [colors.success, colors.info, colors.warning, colors.danger]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            color: colors.textColor
+                        }
                     }
                 }
             }
-        }
-    });
-}
+        });
+    }
 
-function createGatewayActivityChart(gatewayData) {
-    if (!gatewayData || gatewayData.length === 0) return;
+    function createGatewayActivityChart(gatewayData) {
+        if (!gatewayData || gatewayData.length === 0) return;
 
-    hideLoadingSpinner('gatewayActivityChart');
-    const ctx = document.getElementById('gatewayActivityChart');
-    if (!ctx) return;
+        hideLoadingSpinner('gatewayActivityChart');
+        const ctx = document.getElementById('gatewayActivityChart');
+        if (!ctx) return;
 
-    // Take top 10 gateways by packet count
-    const topGateways = gatewayData.slice(0, 10);
-    const labels = topGateways.map(g => g.gateway_id || 'Unknown');
-    const data = topGateways.map(g => g.total_packets || 0);
+        // Take top 10 gateways by packet count
+        const topGateways = gatewayData.slice(0, 10);
+        const labels = topGateways.map(g => g.gateway_id || 'Unknown');
+        const data = topGateways.map(g => g.total_packets || 0);
 
-    const colors = getChartColors();
-    const options = getDefaultChartOptions();
+        const colors = getChartColors();
+        const options = getDefaultChartOptions();
 
-    // Generate gradient colors for bars
-    const barColors = data.map((_, index) => {
-        const opacity = 0.8 - (index * 0.05); // Gradually decrease opacity
-        return `rgba(13, 110, 253, ${Math.max(opacity, 0.3)})`;
-    });
+        // Generate gradient colors for bars
+        const barColors = data.map((_, index) => {
+            const opacity = 0.8 - (index * 0.05); // Gradually decrease opacity
+            return `rgba(13, 110, 253, ${Math.max(opacity, 0.3)})`;
+        });
 
-    // Customize options for bar chart
-    options.plugins.legend.display = false;
-    options.scales.x.ticks.maxRotation = 45;
+        // Customize options for bar chart
+        options.plugins.legend.display = false;
+        options.scales.x.ticks.maxRotation = 45;
 
-    chartInstances.gatewayActivityChart = new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: 'Messages Received',
-                data: data,
-                backgroundColor: barColors,
-                borderColor: colors.primary,
-                borderWidth: 1
-            }]
-        },
-        options: options
-    });
-}
+        chartInstances.gatewayActivityChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Messages Received',
+                    data: data,
+                    backgroundColor: barColors,
+                    borderColor: colors.primary,
+                    borderWidth: 1
+                }]
+            },
+            options: options
+        });
+    }
 
-function createSignalDistributionChart(signalData) {
-    if (!signalData || !signalData.rssi_distribution) return;
+    function createSignalDistributionChart(signalData) {
+        if (!signalData || !signalData.rssi_distribution) return;
 
-    hideLoadingSpinner('signalDistributionChart');
-    const ctx = document.getElementById('signalDistributionChart');
-    if (!ctx) return;
+        hideLoadingSpinner('signalDistributionChart');
+        const ctx = document.getElementById('signalDistributionChart');
+        if (!ctx) return;
 
-    const rssiDist = signalData.rssi_distribution;
-    const colors = getChartColors();
-    const options = getDefaultChartOptions();
+        const rssiDist = signalData.rssi_distribution;
+        const colors = getChartColors();
+        const options = getDefaultChartOptions();
 
-    chartInstances.signalDistributionChart = new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: ['Excellent (>-70dBm)', 'Good (-70 to -80dBm)', 'Fair (-80 to -90dBm)', 'Poor (<-90dBm)'],
-            datasets: [{
-                label: 'Signal Quality Distribution',
-                data: [rssiDist.excellent || 0, rssiDist.good || 0, rssiDist.fair || 0, rssiDist.poor || 0],
-                backgroundColor: [colors.success, colors.warning, colors.info, colors.danger]
-            }]
-        },
-        options: options
-    });
-}
+        chartInstances.signalDistributionChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['Excellent (>-70dBm)', 'Good (-70 to -80dBm)', 'Fair (-80 to -90dBm)', 'Poor (<-90dBm)'],
+                datasets: [{
+                    label: 'Signal Quality Distribution',
+                    data: [rssiDist.excellent || 0, rssiDist.good || 0, rssiDist.fair || 0, rssiDist.poor || 0],
+                    backgroundColor: [colors.success, colors.warning, colors.info, colors.danger]
+                }]
+            },
+            options: options
+        });
+    }
 
-function createHopDistributionChart(temporalData) {
-    // Create a simple hop distribution chart based on available data
-    hideLoadingSpinner('hopDistributionChart');
-    const ctx = document.getElementById('hopDistributionChart');
-    if (!ctx) return;
+    function createHopDistributionChart(temporalData) {
+        // Create a simple hop distribution chart based on available data
+        hideLoadingSpinner('hopDistributionChart');
+        const ctx = document.getElementById('hopDistributionChart');
+        if (!ctx) return;
 
-    const colors = getChartColors();
+        const colors = getChartColors();
 
-    // For now, create a chart showing message routing efficiency
-    // This could be enhanced with actual hop count data from the API
-    chartInstances.hopDistributionChart = new Chart(ctx, {
-        type: 'doughnut',
-        data: {
-            labels: ['Direct Messages', 'Routed Messages', 'Multi-hop Messages'],
-            datasets: [{
-                data: [60, 30, 10], // Placeholder data - could be enhanced with real hop analysis
-                backgroundColor: [colors.success, colors.warning, colors.danger]
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'bottom',
-                    labels: {
-                        color: colors.textColor
+        // For now, create a chart showing message routing efficiency
+        // This could be enhanced with actual hop count data from the API
+        chartInstances.hopDistributionChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Direct Messages', 'Routed Messages', 'Multi-hop Messages'],
+                datasets: [{
+                    data: [60, 30, 10], // Placeholder data - could be enhanced with real hop analysis
+                    backgroundColor: [colors.success, colors.warning, colors.danger]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            color: colors.textColor
+                        }
                     }
                 }
             }
-        }
-    });
-}
+        });
+    }
 
-function createPacketTypesChart(packetTypes) {
-    if (!packetTypes || packetTypes.length === 0) return;
+    function createPacketTypesChart(packetTypes) {
+        if (!packetTypes || packetTypes.length === 0) return;
 
-    hideLoadingSpinner('packetTypesChart');
-    const ctx = document.getElementById('packetTypesChart');
-    if (!ctx) return;
+        hideLoadingSpinner('packetTypesChart');
+        const ctx = document.getElementById('packetTypesChart');
+        if (!ctx) return;
 
-    const labels = packetTypes.map(pt => pt.portnum_name || 'Unknown');
-    const data = packetTypes.map(pt => pt.count);
-    const colors = getChartColors();
+        const labels = packetTypes.map(pt => pt.portnum_name || 'Unknown');
+        const data = packetTypes.map(pt => pt.count);
+        const colors = getChartColors();
 
-    // Generate a variety of colors for different packet types
-    const themeColors = [
-        colors.primary, colors.success, colors.info, colors.warning,
-        colors.danger, colors.secondary, colors.primary, colors.success
-    ];
+        // Generate a variety of colors for different packet types
+        const themeColors = [
+            colors.primary, colors.success, colors.info, colors.warning,
+            colors.danger, colors.secondary, colors.primary, colors.success
+        ];
 
-    chartInstances.packetTypesChart = new Chart(ctx, {
-        type: 'pie',
-        data: {
-            labels: labels,
-            datasets: [{
-                data: data,
-                backgroundColor: themeColors.slice(0, data.length)
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'bottom',
-                    labels: {
-                        color: colors.textColor
+        chartInstances.packetTypesChart = new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: data,
+                    backgroundColor: themeColors.slice(0, data.length)
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            color: colors.textColor
+                        }
                     }
                 }
             }
-        }
-    });
-}
+        });
+    }
 
-function populateTopNodesTable(topNodes) {
-    if (!topNodes || topNodes.length === 0) return;
+    function populateTopNodesTable(topNodes) {
+        if (!topNodes || topNodes.length === 0) return;
 
-    document.getElementById('topNodesLoading').style.display = 'none';
-    document.getElementById('topNodesTableContainer').style.display = 'block';
+        document.getElementById('topNodesLoading').style.display = 'none';
+        document.getElementById('topNodesTableContainer').style.display = 'block';
 
-    const tbody = document.querySelector('#topNodesTable tbody');
-    if (!tbody) return;
+        const tbody = document.querySelector('#topNodesTable tbody');
+        if (!tbody) return;
 
-    tbody.innerHTML = '';
+        tbody.innerHTML = '';
 
-    topNodes.slice(0, 10).forEach(node => {
-        const row = document.createElement('tr');
+        topNodes.slice(0, 10).forEach(node => {
+            const row = document.createElement('tr');
 
-        // Node name with link
-        const nodeName = node.display_name || `!${node.node_id.toString(16).padStart(8, '0')}`;
-        const nodeLink = `/node/${node.node_id}`;
+            // Node name with link
+            const nodeName = node.display_name || `!${node.node_id.toString(16).padStart(8, '0')}`;
+            const nodeLink = `/node/${node.node_id}`;
 
-        // Signal quality indicator
-        let signalClass = 'text-muted';
-        let signalText = 'N/A';
-        if (node.avg_rssi && node.avg_rssi !== 0) {
-            if (node.avg_rssi > -70) {
-                signalClass = 'text-success';
-                signalText = 'Excellent';
-            } else if (node.avg_rssi > -80) {
-                signalClass = 'text-warning';
-                signalText = 'Good';
-            } else if (node.avg_rssi > -90) {
-                signalClass = 'text-info';
-                signalText = 'Fair';
-            } else {
-                signalClass = 'text-danger';
-                signalText = 'Poor';
+            // Signal quality indicator
+            let signalClass = 'text-muted';
+            let signalText = 'N/A';
+            if (node.avg_rssi && node.avg_rssi !== 0) {
+                if (node.avg_rssi > -70) {
+                    signalClass = 'text-success';
+                    signalText = 'Excellent';
+                } else if (node.avg_rssi > -80) {
+                    signalClass = 'text-warning';
+                    signalText = 'Good';
+                } else if (node.avg_rssi > -90) {
+                    signalClass = 'text-info';
+                    signalText = 'Fair';
+                } else {
+                    signalClass = 'text-danger';
+                    signalText = 'Poor';
+                }
             }
-        }
 
-        row.innerHTML = `
+            row.innerHTML = `
             <td><a href="${nodeLink}" class="text-decoration-none">${nodeName}</a></td>
             <td><span class="badge bg-primary">${node.packet_count || 0}</span></td>
             <td><span class="${signalClass}">${signalText}</span></td>
         `;
 
-        tbody.appendChild(row);
-    });
-}
+            tbody.appendChild(row);
+        });
+    }
 </script>
 
 <!-- Chart.js for analytics charts -->

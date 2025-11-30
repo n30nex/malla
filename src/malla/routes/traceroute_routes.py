@@ -7,9 +7,13 @@ import logging
 from flask import Blueprint, render_template, request
 
 # Import from the new modular architecture
+from ..instrumentation import register_metrics
 
 logger = logging.getLogger(__name__)
 traceroute_bp = Blueprint("traceroute", __name__)
+
+# Register metrics hooks
+register_metrics(traceroute_bp)
 
 
 @traceroute_bp.route("/traceroute")

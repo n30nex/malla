@@ -14,6 +14,28 @@ from malla.database.connection import get_db_connection, put_db_connection
 from psycopg2.extras import RealDictCursor
 
 
+def _cleanup_test_data(node_ids: list[int]) -> None:
+    """Remove any test data inserted by these tests."""
+    if not node_ids:
+        return
+
+    with mqtt_capture.db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cursor.execute("DELETE FROM packet_history WHERE topic LIKE 'test/%'")
+            # Use IN clause with proper tuple formatting for PostgreSQL
+            placeholders = ','.join(['%s'] * len(node_ids))
+            cursor.execute(
+                f"DELETE FROM node_info WHERE node_id IN ({placeholders})",
+                tuple(node_ids),
+            )
+            conn.commit()
+        finally:
+            cursor.close()
+            put_db_connection(conn)
+
+
 class TestDataCleanup:
     """Test data cleanup functionality."""
 
@@ -24,28 +46,25 @@ class TestDataCleanup:
         mqtt_capture.init_database()
 
         # Use unique node IDs based on current time to avoid conflicts
-        import random
         base_id = int(time.time() * 1000) % 0x7FFFFFFF  # Use timestamp-based unique IDs
         node_id_1 = base_id + 1
         node_id_2 = base_id + 2
         node_id_3 = base_id + 3
+        node_ids = [node_id_1, node_id_2, node_id_3]
 
-        # Clean up any existing test data from previous runs
+        # Get timestamps
         current_time = time.time()
         old_time = current_time - (48 * 3600)  # 48 hours ago
         cutoff_time = current_time - (24 * 3600)  # 24 hours ago (for cleanup verification)
 
+        # Clean up any existing test data from previous runs first
+        _cleanup_test_data(node_ids)
+        # Also clean all test packets to avoid conflicts from parallel runs
         with mqtt_capture.db_lock:
             conn = get_db_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             try:
-                # Delete any existing test packets
                 cursor.execute("DELETE FROM packet_history WHERE topic LIKE 'test/%'")
-                # Delete any existing test nodes (if they exist)
-                cursor.execute(
-                    "DELETE FROM node_info WHERE node_id IN (%s, %s, %s)",
-                    (node_id_1, node_id_2, node_id_3),
-                )
                 conn.commit()
             finally:
                 cursor.close()
@@ -151,7 +170,6 @@ class TestDataCleanup:
         try:
             # Run the cleanup function (ensure lock is released before calling)
             # Add a small delay to ensure any pending transactions are committed
-            import time
             time.sleep(0.1)
             mqtt_capture.cleanup_old_data()
 
@@ -204,8 +222,9 @@ class TestDataCleanup:
                     put_db_connection(conn)
 
         finally:
-            # Restore original retention hours
+            # Restore original retention hours and clean up inserted data
             mqtt_capture.DATA_RETENTION_HOURS = original_retention
+            _cleanup_test_data(node_ids)
 
     @pytest.mark.integration
     def test_cleanup_disabled(self):
@@ -216,6 +235,20 @@ class TestDataCleanup:
         # Use unique node ID based on current time to avoid conflicts
         base_id = int(time.time() * 1000) % 0x7FFFFFFF
         node_id = base_id + 100
+        node_ids = [node_id]
+
+        # Clean up any existing test data from previous runs first
+        _cleanup_test_data(node_ids)
+        # Also clean all test packets to avoid conflicts from parallel runs
+        with mqtt_capture.db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            try:
+                cursor.execute("DELETE FROM packet_history WHERE topic LIKE 'test/%'")
+                conn.commit()
+            finally:
+                cursor.close()
+                put_db_connection(conn)
 
         # Insert test data
         current_time = time.time()
@@ -245,17 +278,25 @@ class TestDataCleanup:
                 cursor.close()
                 put_db_connection(conn)
 
-        # Verify initial data
+        # Verify initial data - count only test packets
         with mqtt_capture.db_lock:
             conn = get_db_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             try:
-                cursor.execute("SELECT COUNT(*) as count FROM packet_history")
-                initial_packets = cursor.fetchone()["count"]
+                cursor.execute("SELECT COUNT(*) as count FROM packet_history WHERE topic LIKE 'test/%'")
+                initial_test_packets = cursor.fetchone()["count"]
 
-                cursor.execute("SELECT COUNT(*) as count FROM node_info")
-                initial_nodes = cursor.fetchone()["count"]
+                # Use IN clause with proper formatting
+                placeholders = ','.join(['%s'] * len(node_ids))
+                cursor.execute(
+                    f"SELECT COUNT(*) as count FROM node_info WHERE node_id IN ({placeholders})",
+                    tuple(node_ids),
+                )
+                initial_test_nodes = cursor.fetchone()["count"]
+
+                assert initial_test_packets == 1, f"Expected 1 test packet initially, got {initial_test_packets}"
+                assert initial_test_nodes == 1, f"Expected 1 test node initially, got {initial_test_nodes}"
             finally:
                 cursor.close()
                 put_db_connection(conn)
@@ -268,29 +309,35 @@ class TestDataCleanup:
             # Run the cleanup function
             mqtt_capture.cleanup_old_data()
 
-            # Verify no cleanup occurred
+            # Verify no cleanup occurred - check only test data
             with mqtt_capture.db_lock:
                 conn = get_db_connection()
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
 
                 try:
-                    cursor.execute("SELECT COUNT(*) as count FROM packet_history")
-                    remaining_packets = cursor.fetchone()["count"]
+                    cursor.execute("SELECT COUNT(*) as count FROM packet_history WHERE topic LIKE 'test/%'")
+                    remaining_test_packets = cursor.fetchone()["count"]
 
-                    cursor.execute("SELECT COUNT(*) as count FROM node_info")
-                    remaining_nodes = cursor.fetchone()["count"]
-
-                    # Verify results
-                    assert remaining_packets == initial_packets, (
-                        f"Expected {initial_packets} packets to remain, got {remaining_packets}"
+                    # Use IN clause with proper formatting
+                    placeholders = ','.join(['%s'] * len(node_ids))
+                    cursor.execute(
+                        f"SELECT COUNT(*) as count FROM node_info WHERE node_id IN ({placeholders})",
+                        tuple(node_ids),
                     )
-                    assert remaining_nodes == initial_nodes, (
-                        f"Expected {initial_nodes} nodes to remain, got {remaining_nodes}"
+                    remaining_test_nodes = cursor.fetchone()["count"]
+
+                    # Verify results - test data should remain unchanged
+                    assert remaining_test_packets == initial_test_packets, (
+                        f"Expected {initial_test_packets} test packets to remain, got {remaining_test_packets}"
+                    )
+                    assert remaining_test_nodes == initial_test_nodes, (
+                        f"Expected {initial_test_nodes} test nodes to remain, got {remaining_test_nodes}"
                     )
                 finally:
                     cursor.close()
                     put_db_connection(conn)
 
         finally:
-            # Restore original retention hours
+            # Restore original retention hours and clean up inserted data
             mqtt_capture.DATA_RETENTION_HOURS = original_retention
+            _cleanup_test_data(node_ids)

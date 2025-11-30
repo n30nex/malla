@@ -13,6 +13,11 @@ from pathlib import Path
 
 import pytest
 from flask import jsonify
+import psycopg2
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+# Allow SQLite for tests regardless of production posture
+os.environ.setdefault("MALLA_ALLOW_SQLITE_FOR_TESTS", "1")
 
 # Ensure local source is importable without an installed package
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -23,7 +28,7 @@ if str(SRC_PATH) not in sys.path:
 from malla.config import AppConfig
 
 # Import the application factory
-from src.malla.web_ui import create_app
+from malla.web_ui import create_app
 from tests.fixtures.database_fixtures import DatabaseFixtures
 from tests.fixtures.traceroute_graph_data import get_sample_graph_data
 
@@ -44,7 +49,7 @@ def worker_id(request):
 class TestFlaskApp:
     """Test Flask app using the real application with test fixtures."""
 
-    def __init__(self, port=None):
+    def __init__(self, port=None, database_url=None):
         if port is None:
             # Find an available port
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -53,18 +58,26 @@ class TestFlaskApp:
 
         self.port = port
         self.server_thread = None
+        self.database_url = database_url
 
-        # Create a temporary database for testing
-        self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
-        self.temp_db.close()
-
-        # Build an AppConfig overriding only the database path
-        self._cfg = AppConfig(
-            database_file=self.temp_db.name,
-            host="127.0.0.1",
-            port=self.port,
-            debug=False,
-        )
+        # Build an AppConfig pointing at the test database
+        if self.database_url:
+            self._cfg = AppConfig(
+                database_url=self.database_url,
+                host="127.0.0.1",
+                port=self.port,
+                debug=False,
+            )
+        else:
+            # Fallback to SQLite for legacy/local runs
+            self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+            self.temp_db.close()
+            self._cfg = AppConfig(
+                database_file=self.temp_db.name,
+                host="127.0.0.1",
+                port=self.port,
+                debug=False,
+            )
 
         # Create the real Flask app with injected config
         self.app = create_app(self._cfg)
@@ -79,7 +92,11 @@ class TestFlaskApp:
         """Set up test data in the database."""
         # Initialize database with test fixtures
         db_fixtures = DatabaseFixtures()
-        db_fixtures.create_test_database(self.temp_db.name)
+        if self.database_url and self.database_url.startswith("postgres"):
+            # Already seeded by the session-level fixture
+            return
+        else:
+            db_fixtures.create_test_database(self.temp_db.name)
 
     def _setup_test_routes(self):
         """Set up additional test-specific routes."""
@@ -124,10 +141,11 @@ class TestFlaskApp:
             pass
 
         # Clean up temporary database
-        try:
-            os.unlink(self.temp_db.name)
-        except FileNotFoundError:
-            pass
+        if hasattr(self, "temp_db"):
+            try:
+                os.unlink(self.temp_db.name)
+            except FileNotFoundError:
+                pass
 
     @property
     def url(self):
@@ -139,8 +157,8 @@ class TestFlaskApp:
 class GenericTestServer:
     """Generic test server for E2E tests - legacy wrapper around TestFlaskApp."""
 
-    def __init__(self, port=None):
-        self._test_app = TestFlaskApp(port)
+    def __init__(self, port=None, database_url=None):
+        self._test_app = TestFlaskApp(port, database_url=database_url)
         self.port = self._test_app.port
         self.app = self._test_app.app
         self.server_thread = None
@@ -195,7 +213,55 @@ class GenericTestServer:
 
 
 @pytest.fixture(scope="session")
-def test_server(worker_id):
+def test_database_url(worker_id):
+    """Provision a dedicated PostgreSQL database per worker with fixture data."""
+    base_dsn = os.getenv(
+        "MALLA_TEST_DATABASE_URL",
+        "postgresql://postgres:postgres@localhost:5432/postgres",
+    )
+
+    parsed = urlparse(base_dsn)
+    admin_db = parsed.path.lstrip("/") or "postgres"
+    schema_name = f"malla_test_{os.getpid()}_{worker_id}".replace("-", "_")
+
+    admin_dsn = urlunparse(parsed._replace(path=f"/{admin_db}", query=""))
+
+    def _with_search_path(schema: str) -> str:
+        # Preserve existing query params and safely append options for search_path
+        params = [
+            (key, value)
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if key != "options"
+        ]
+        params.append(("options", f"-csearch_path={schema}"))
+        query = urlencode(params, doseq=True)
+        return urlunparse(parsed._replace(query=query))
+
+    test_dsn = _with_search_path(schema_name)
+
+    # Prepare schema inside the admin DB (schema-scoped fixtures)
+    from psycopg2 import extensions
+
+    with psycopg2.connect(admin_dsn) as admin_conn:
+        admin_conn.set_isolation_level(extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+        with admin_conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE")
+            cur.execute(f"CREATE SCHEMA {schema_name}")
+
+    # Populate fixtures into the dedicated schema
+    DatabaseFixtures().create_test_database_postgres(test_dsn, schema=schema_name)
+
+    yield test_dsn
+
+    # Cleanup: drop schema
+    with psycopg2.connect(admin_dsn) as admin_conn:
+        admin_conn.set_isolation_level(extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+        with admin_conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE")
+
+
+@pytest.fixture(scope="session")
+def test_server(worker_id, test_database_url):
     """Provide a test server instance for the entire test session."""
     # Use different ports for different workers to avoid conflicts
     base_port = 15000
@@ -206,7 +272,7 @@ def test_server(worker_id):
         worker_num = int(worker_id.replace("gw", ""))
         port = base_port + worker_num + 1
 
-    server = TestFlaskApp(port)
+    server = TestFlaskApp(port, database_url=test_database_url)
     server.start()
 
     yield server
@@ -215,7 +281,7 @@ def test_server(worker_id):
 
 
 @pytest.fixture(scope="session")
-def generic_test_server(worker_id):
+def generic_test_server(worker_id, test_database_url):
     """Provide a generic test server instance for backward compatibility."""
     # Use different ports for different workers to avoid conflicts
     base_port = 16000
@@ -226,7 +292,7 @@ def generic_test_server(worker_id):
         worker_num = int(worker_id.replace("gw", ""))
         port = base_port + worker_num + 1
 
-    server = GenericTestServer(port)
+    server = GenericTestServer(port, database_url=test_database_url)
     server.start()
 
     yield server
@@ -235,51 +301,22 @@ def generic_test_server(worker_id):
 
 
 @pytest.fixture(scope="function")
-def temp_database():
-    """Provide a temporary database for individual tests."""
-    temp_db = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
-    temp_db.close()
-
-    # Set up test data
-    db_fixtures = DatabaseFixtures()
-    db_fixtures.create_test_database(temp_db.name)
-
-    yield temp_db.name
-
-    # Clean up
-    try:
-        os.unlink(temp_db.name)
-    except FileNotFoundError:
-        pass
+def temp_database(test_database_url):
+    """Provide a PostgreSQL database URL for individual tests."""
+    yield test_database_url
 
 
 @pytest.fixture(scope="function")
-def test_client():
+def test_client(test_database_url):
     """Provide a Flask test client for unit tests."""
-    # Create a temporary database
-    temp_db = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
-    temp_db.close()
+    cfg = AppConfig(database_url=test_database_url)
 
-    # Build a config object pointing at the temporary DB
-    cfg = AppConfig(database_file=temp_db.name)
+    # Create the app with injected config
+    app = create_app(cfg)
+    app.config["TESTING"] = True
 
-    try:
-        # Create the app with injected config
-        app = create_app(cfg)
-        app.config["TESTING"] = True
-
-        # Set up test data
-        db_fixtures = DatabaseFixtures()
-        db_fixtures.create_test_database(temp_db.name)
-
-        with app.test_client() as client:
-            yield client
-    finally:
-        # Clean up temporary database
-        try:
-            os.unlink(temp_db.name)
-        except FileNotFoundError:
-            pass
+    with app.test_client() as client:
+        yield client
 
 
 @pytest.fixture(scope="session")
@@ -307,31 +344,15 @@ def map_server(test_server):
 
 
 @pytest.fixture(scope="function")
-def app():
+def app(test_database_url):
     """Provide a Flask app instance for unit tests."""
-    # Create a temporary database
-    temp_db = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
-    temp_db.close()
+    cfg = AppConfig(database_url=test_database_url)
 
-    # Build a config object pointing at the temporary DB
-    cfg = AppConfig(database_file=temp_db.name)
+    # Create the app with injected config
+    app = create_app(cfg)
+    app.config["TESTING"] = True
 
-    try:
-        # Create the app with injected config
-        app = create_app(cfg)
-        app.config["TESTING"] = True
-
-        # Set up test data
-        db_fixtures = DatabaseFixtures()
-        db_fixtures.create_test_database(temp_db.name)
-
-        yield app
-    finally:
-        # Clean up temporary database
-        try:
-            os.unlink(temp_db.name)
-        except FileNotFoundError:
-            pass
+    yield app
 
 
 @pytest.fixture(scope="function")

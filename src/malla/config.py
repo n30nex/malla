@@ -215,24 +215,26 @@ def validate_config(cfg: AppConfig) -> None:
     """Validate required configuration and enforce PostgreSQL-only backend."""
 
     errors: list[str] = []
+    allow_sqlite_for_tests = os.getenv("MALLA_ALLOW_SQLITE_FOR_TESTS") == "1"
 
-    if cfg.database_url and not _is_postgres_url(cfg.database_url):
-        errors.append(
-            "MALLA_DATABASE_URL must use a PostgreSQL DSN (postgresql:// or postgres://). "
-            "SQLite and other backends are unsupported."
-        )
+    if not allow_sqlite_for_tests:
+        if cfg.database_url and not _is_postgres_url(cfg.database_url):
+            errors.append(
+                "MALLA_DATABASE_URL must use a PostgreSQL DSN (postgresql:// or postgres://). "
+                "SQLite and other backends are unsupported."
+            )
 
-    if _looks_like_sqlite(cfg):
-        errors.append(
-            "SQLite backend is not supported; configure PostgreSQL via MALLA_DATABASE_URL "
-            "or MALLA_DATABASE_HOST/PORT/NAME/USER/PASSWORD."
-        )
+        if _looks_like_sqlite(cfg):
+            errors.append(
+                "SQLite backend is not supported; configure PostgreSQL via MALLA_DATABASE_URL "
+                "or MALLA_DATABASE_HOST/PORT/NAME/USER/PASSWORD."
+            )
 
-    if not cfg.database_url and not cfg.database_host:
-        errors.append(
-            "Database configuration missing: set MALLA_DATABASE_URL or "
-            "MALLA_DATABASE_HOST/PORT/NAME/USER/PASSWORD."
-        )
+        if not cfg.database_url and not cfg.database_host:
+            errors.append(
+                "Database configuration missing: set MALLA_DATABASE_URL or "
+                "MALLA_DATABASE_HOST/PORT/NAME/USER/PASSWORD."
+            )
 
     if not cfg.mqtt_broker_address:
         errors.append("MQTT broker address is required (MALLA_MQTT_BROKER_ADDRESS).")

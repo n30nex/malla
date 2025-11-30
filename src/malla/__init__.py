@@ -1,5 +1,5 @@
 """
-Malla - Meshtastic MQTT to PostgreSQL capture and web monitoring tools.
+Malla - Meshtastic MQTT to PostgreSQL capture and analytics platform.
 
 A comprehensive web UI for browsing and analyzing Meshtastic mesh network health data.
 """

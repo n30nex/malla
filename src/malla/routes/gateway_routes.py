@@ -8,12 +8,16 @@ from datetime import datetime
 from flask import Blueprint, jsonify, render_template, request
 
 from ..database.repositories import NodeRepository
+from ..instrumentation import register_metrics
 from ..services.gateway_service import GatewayService
 from ..utils.node_utils import transform_nodes_for_template
 
 logger = logging.getLogger(__name__)
 
 gateway_bp = Blueprint("gateway", __name__, url_prefix="/gateway")
+
+# Register metrics hooks
+register_metrics(gateway_bp)
 
 
 @gateway_bp.route("/compare")

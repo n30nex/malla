@@ -1,6 +1,8 @@
 # Malla
 
-Malla (Spanish for "mesh") captures Meshtastic MQTT traffic into PostgreSQL and ships a Flask web UI packed with mesh analytics. Both the capture daemon and the UI read a single config, so you can point them at the same broker/database and get dashboards within minutes.
+Malla (Spanish for "mesh") captures Meshtastic MQTT traffic into **PostgreSQL** and provides a comprehensive Flask web UI for mesh analytics. Both the capture daemon and the UI read a single config, so you can point them at the same broker/database and get dashboards within minutes.
+
+> **Note**: Malla requires PostgreSQL 13+. SQLite support has been removed except for legacy test fixtures.
 
 ## Running Instances
 - meshtastic.es (Spain): https://malla.meshtastic.es
@@ -54,34 +56,53 @@ The provided compose file runs PostgreSQL, the capture daemon, and the web UI to
    ```
 
 ## Local Development with uv
-1. Install uv (if needed):
+
+### Prerequisites
+- Python 3.13+
+- PostgreSQL 13+ (required)
+- uv package manager
+
+### Quick Setup
+
+1. **Install uv** (if needed):
    ```bash
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
-2. Install dependencies (adds a local `.venv`):
+
+2. **Install dependencies**:
    ```bash
    uv sync --dev
    ```
-3. Start or point to PostgreSQL (example):
+
+3. **Start PostgreSQL**:
    ```bash
-   docker compose up -d postgres  # uses the included service
-   export MALLA_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/meshtastic_history
+   docker compose up -d postgres
    ```
-4. Create a config and set MQTT:
+   Or use your own PostgreSQL instance.
+
+4. **Configure environment** (copy template):
    ```bash
-   cp config.sample.yaml config.yaml
-   $EDITOR config.yaml  # set mqtt_broker_address, optional home_markdown, etc.
+   cp dev.env.example .env
+   # Edit .env with your database credentials and MQTT settings
+   export $(cat .env | grep -v '^#' | xargs)
    ```
-5. Run the services (separate terminals):
+
+5. **Run services**:
    ```bash
-   uv run malla-capture
-   uv run malla-web          # dev server
-   # or: uv run malla-web-gunicorn
+   # Option 1: Use Makefile (recommended)
+   make help          # see all commands
+   make dev-all       # run both capture + web
+   make metrics       # view Prometheus metrics
+
+   # Option 2: Run manually
+   uv run malla-capture   # MQTT capture (port 9100 for metrics)
+   uv run malla-web       # Web UI (port 5001)
    ```
-6. Custom config path:
-   ```bash
-   export MALLA_CONFIG_FILE=/path/to/config.yaml
-   ```
+
+6. **Access the UI**:
+   - Web UI: http://localhost:5001
+   - Capture metrics: http://localhost:9100/metrics
+   - Web metrics: http://localhost:5001/metrics
 
 ## Configuration
 Configuration is loaded in this order: defaults -> `config.yaml` (or `MALLA_CONFIG_FILE`) -> environment variables prefixed with `MALLA_`. All env vars override YAML.
@@ -112,10 +133,32 @@ Notes:
 Set `data_retention_hours` to automatically delete packet_history rows older than N hours and stale node_info entries with no recent packets. Defaults to `0` (no deletion). Cleanup runs hourly in the capture process.
 
 ## Testing
-- Install test deps: `python run_tests.py --install`
-- Run everything: `python run_tests.py all -v`
-- Common subsets: `python run_tests.py unit`, `python run_tests.py integration`, `python run_tests.py api`
-- Direct pytest (with uv): `uv run pytest`
+
+```bash
+# Run all tests
+make test
+
+# Run specific test suites
+make test-unit          # Unit tests only
+make test-integration   # Integration tests only
+make test-e2e           # End-to-end tests
+
+# With coverage
+make test-coverage
+
+# Or use pytest directly
+uv run pytest
+python run_tests.py all -v  # legacy test runner
+```
+
+## Linting & Formatting
+
+```bash
+make lint          # Run ruff linting
+make format        # Format code with ruff
+make typecheck     # Run basedpyright
+make check         # Run all checks (lint + typecheck)
+```
 
 ## License
 MIT License. See `LICENSE` for details.

@@ -38,12 +38,7 @@ import threading
 import time
 from typing import Any
 
-from opentelemetry import trace
-from prometheus_client import Counter, Gauge, Histogram, start_http_server
-
 import paho.mqtt.client as mqtt
-import psycopg2
-from psycopg2 import errors
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from meshtastic import (
@@ -53,20 +48,29 @@ from meshtastic import (
     portnums_pb2,
     telemetry_pb2,
 )
+from opentelemetry import trace
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
+
 try:
     from paho.mqtt.enums import CallbackAPIVersion
 except Exception:
     try:
         from paho.mqtt.client import CallbackAPIVersion  # type: ignore
     except Exception:
+
         class CallbackAPIVersion:  # type: ignore
             V5 = 5
+
+
 from psycopg2.extras import RealDictCursor
 
 # ---------------------------------------------------------------------------
 # Configuration (centralised via malla.config)
 # ---------------------------------------------------------------------------
-from malla.config import get_config, validate_config  # Import here to avoid circular import issues
+from malla.config import (  # Import here to avoid circular import issues
+    get_config,
+    validate_config,
+)
 from malla.database.connection import get_db_connection, put_db_connection
 from malla.logging_utils import setup_logging
 from malla.telemetry import setup_telemetry
@@ -94,7 +98,9 @@ MQTT_TLS_CLIENT_KEY: str | None = _cfg.mqtt_tls_client_key
 MQTT_TLS_INSECURE: bool = _cfg.mqtt_tls_insecure
 MQTT_RECONNECT_MAX_RETRIES: int = max(1, _cfg.mqtt_reconnect_max_retries)
 MQTT_RECONNECT_BASE_DELAY: int = max(1, _cfg.mqtt_reconnect_base_delay)
-MQTT_RECONNECT_MAX_DELAY: int = max(MQTT_RECONNECT_BASE_DELAY, _cfg.mqtt_reconnect_max_delay)
+MQTT_RECONNECT_MAX_DELAY: int = max(
+    MQTT_RECONNECT_BASE_DELAY, _cfg.mqtt_reconnect_max_delay
+)
 
 # Database file path
 DATABASE_FILE: str = _cfg.database_file
@@ -105,7 +111,9 @@ DECRYPTION_KEYS: list[str] = _cfg.get_decryption_keys()
 
 # Data retention settings
 DATA_RETENTION_HOURS: int = _cfg.data_retention_hours
-DATA_CLEANUP_INTERVAL_SECONDS: int = max(60, int(getattr(_cfg, "data_cleanup_interval_seconds", 3600)))
+DATA_CLEANUP_INTERVAL_SECONDS: int = max(
+    60, int(getattr(_cfg, "data_cleanup_interval_seconds", 3600))
+)
 METRICS_ENABLED: bool = getattr(_cfg, "metrics_enabled", False)
 METRICS_PORT: int = getattr(_cfg, "metrics_port", 9100)
 
@@ -140,89 +148,58 @@ ingest_stats = {
 }
 
 # Prometheus metrics (counters accumulate; optional HTTP exporter)
-# Use try/except to handle duplicate registration during module reloads
-try:
+# Module-level guards prevent duplicate registration
+_metrics_registered = False
+
+
+def _init_metrics():
+    """Initialize Prometheus metrics once per process."""
+    global _metrics_registered, PACKETS_RECEIVED, PACKETS_PARSED, PACKETS_PARSE_FAILED
+    global PACKETS_DECRYPT_SUCCESS, PACKETS_DECRYPT_FAILED, ACTIVE_THREADS
+    global DB_QUERY_DURATION, PACKET_PROCESS_DURATION, CLEANUP_FAILURES
+
+    if _metrics_registered:
+        return
+
     PACKETS_RECEIVED = Counter("malla_packets_received_total", "MQTT messages received")
-except ValueError:
-    from prometheus_client import REGISTRY
-    PACKETS_RECEIVED = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_packets_received_total"), None)
-    if PACKETS_RECEIVED is None:
-        raise
-
-try:
-    PACKETS_PARSED = Counter("malla_packets_parsed_total", "Packets parsed successfully")
-except ValueError:
-    from prometheus_client import REGISTRY
-    PACKETS_PARSED = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_packets_parsed_total"), None)
-    if PACKETS_PARSED is None:
-        raise
-
-try:
-    PACKETS_PARSE_FAILED = Counter("malla_packets_parse_failed_total", "Packets that failed to parse")
-except ValueError:
-    from prometheus_client import REGISTRY
-    PACKETS_PARSE_FAILED = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_packets_parse_failed_total"), None)
-    if PACKETS_PARSE_FAILED is None:
-        raise
-
-try:
-    PACKETS_DECRYPT_SUCCESS = Counter("malla_packets_decrypt_success_total", "Packets decrypted successfully")
-except ValueError:
-    from prometheus_client import REGISTRY
-    PACKETS_DECRYPT_SUCCESS = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_packets_decrypt_success_total"), None)
-    if PACKETS_DECRYPT_SUCCESS is None:
-        raise
-
-try:
-    PACKETS_DECRYPT_FAILED = Counter("malla_packets_decrypt_failed_total", "Packets failed to decrypt")
-except ValueError:
-    from prometheus_client import REGISTRY
-    PACKETS_DECRYPT_FAILED = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_packets_decrypt_failed_total"), None)
-    if PACKETS_DECRYPT_FAILED is None:
-        raise
-
-try:
+    PACKETS_PARSED = Counter(
+        "malla_packets_parsed_total", "Packets parsed successfully"
+    )
+    PACKETS_PARSE_FAILED = Counter(
+        "malla_packets_parse_failed_total", "Packets that failed to parse"
+    )
+    PACKETS_DECRYPT_SUCCESS = Counter(
+        "malla_packets_decrypt_success_total", "Packets decrypted successfully"
+    )
+    PACKETS_DECRYPT_FAILED = Counter(
+        "malla_packets_decrypt_failed_total", "Packets failed to decrypt"
+    )
     ACTIVE_THREADS = Gauge("malla_active_threads", "Active threads in capture process")
-except ValueError:
-    from prometheus_client import REGISTRY
-    ACTIVE_THREADS = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_active_threads"), None)
-    if ACTIVE_THREADS is None:
-        raise
-
-try:
     DB_QUERY_DURATION = Histogram(
         "malla_capture_db_query_seconds",
         "Database operation duration in seconds (capture service)",
         ["operation"],
     )
-except ValueError:
-    from prometheus_client import REGISTRY
-    DB_QUERY_DURATION = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_capture_db_query_seconds"), None)
-    if DB_QUERY_DURATION is None:
-        raise
-
-try:
     PACKET_PROCESS_DURATION = Histogram(
         "malla_packet_process_seconds",
         "End-to-end MQTT packet processing duration in seconds",
         ["stage"],
     )
-except ValueError:
-    from prometheus_client import REGISTRY
-    PACKET_PROCESS_DURATION = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_packet_process_seconds"), None)
-    if PACKET_PROCESS_DURATION is None:
-        raise
-
-try:
     CLEANUP_FAILURES = Counter(
         "malla_data_cleanup_failures_total",
         "Total number of data cleanup failures",
     )
-except ValueError:
-    from prometheus_client import REGISTRY
-    CLEANUP_FAILURES = next((c for c in REGISTRY._collector_to_names.keys() if hasattr(c, '_name') and c._name == "malla_data_cleanup_failures_total"), None)
-    if CLEANUP_FAILURES is None:
-        raise
+
+    _metrics_registered = True
+
+
+# Initialize metrics on module load
+try:
+    _init_metrics()
+except ValueError as e:
+    # Metrics already registered (e.g., in tests or reload scenarios)
+    logging.debug(f"Metrics already registered: {e}")
+    _metrics_registered = True
 
 TRACER = trace.get_tracer(__name__)
 
@@ -403,227 +380,6 @@ def try_decrypt_mesh_packet(
 
 
 # --- Database Functions ---
-def init_database() -> None:
-    """Initialize PostgreSQL database with required tables."""
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-
-    # Avoid startup deadlocks when multiple services initialize at once
-    try:
-        cursor.execute("SET lock_timeout TO '5s'")
-    except Exception:
-        logging.debug("Could not set lock_timeout; continuing without it")
-
-    def _create_index(sql: str) -> None:
-        """Create index with deadlock tolerance."""
-        try:
-            cursor.execute(sql)
-            conn.commit()
-        except errors.DeadlockDetected as exc:
-            logging.warning(f"Skipped index creation due to deadlock: {exc}")
-            conn.rollback()
-        except Exception as exc:
-            # Non-fatal: log and continue
-            logging.warning(f"Index creation failed ({sql[:60]}...): {exc}")
-            conn.rollback()
-
-    try:
-        # Table for packet history
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS packet_history (
-                id BIGSERIAL PRIMARY KEY,
-                timestamp DOUBLE PRECISION NOT NULL,
-                topic TEXT NOT NULL,
-                from_node_id BIGINT,
-                to_node_id BIGINT,
-                portnum INTEGER,
-                portnum_name TEXT,
-                gateway_id TEXT,
-                channel_id TEXT,
-                mesh_packet_id BIGINT,
-                rssi INTEGER,
-                snr DOUBLE PRECISION,
-                hop_limit INTEGER,
-                hop_start INTEGER,
-                payload_length INTEGER,
-                raw_payload BYTEA,
-                processed_successfully BOOLEAN DEFAULT TRUE,
-                message_type TEXT,
-                raw_service_envelope BYTEA,
-                parsing_error TEXT
-            )
-        """)
-        conn.commit()
-    except Exception as e:
-        logging.error(f"Error creating packet_history table: {e}")
-        conn.rollback()
-        raise
-
-    # Add mesh_packet_id column if it doesn't exist (for existing databases)
-    try:
-        cursor.execute("ALTER TABLE packet_history ADD COLUMN mesh_packet_id BIGINT")
-        logging.info("Added mesh_packet_id column to packet_history table")
-        conn.commit()
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "duplicate column" in error_msg or "already exists" in error_msg:
-            logging.debug("mesh_packet_id column already exists")
-            conn.rollback()
-        else:
-            logging.warning(f"Could not add mesh_packet_id column: {e}")
-            conn.rollback()
-
-    # Add new MeshPacket fields if they don't exist (for existing databases)
-    new_columns = [
-        ("via_mqtt", "BOOLEAN"),
-        ("want_ack", "BOOLEAN"),
-        ("priority", "INTEGER"),
-        ("delayed", "INTEGER"),
-        ("channel_index", "INTEGER"),
-        ("rx_time", "INTEGER"),
-        ("pki_encrypted", "BOOLEAN"),
-        ("next_hop", "BIGINT"),
-        ("relay_node", "BIGINT"),
-        ("tx_after", "INTEGER"),
-        ("message_type", "TEXT"),
-        ("raw_service_envelope", "BYTEA"),
-        ("parsing_error", "TEXT"),
-    ]
-
-    for column_name, column_type in new_columns:
-        try:
-            cursor.execute(
-                f"ALTER TABLE packet_history ADD COLUMN {column_name} {column_type}"
-            )
-            logging.info(f"Added {column_name} column to packet_history table")
-            conn.commit()
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "duplicate column" in error_msg or "already exists" in error_msg:
-                logging.debug(f"{column_name} column already exists")
-                conn.rollback()
-            else:
-                logging.warning(f"Could not add {column_name} column: {e}")
-                conn.rollback()
-
-    try:
-        # Table for node information cache
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS node_info (
-                node_id INTEGER PRIMARY KEY,
-                hex_id TEXT,
-                long_name TEXT,
-                short_name TEXT,
-                hw_model TEXT,
-                role TEXT,
-                primary_channel TEXT,
-                is_licensed BOOLEAN,
-                mac_address TEXT,
-                first_seen DOUBLE PRECISION NOT NULL,
-                last_updated DOUBLE PRECISION NOT NULL
-            )
-        """)
-        conn.commit()
-    except Exception as e:
-        logging.error(f"Error creating node_info table: {e}")
-        conn.rollback()
-        raise
-
-    # Composite indexes for /api/nodes aggregation queries (96% faster than single-column indexes)
-    # These covering indexes allow PostgreSQL to perform aggregations using only the index
-    _create_index(
-        "CREATE INDEX IF NOT EXISTS idx_packet_history_stats ON packet_history(timestamp, from_node_id)"
-    )
-    _create_index(
-        "CREATE INDEX IF NOT EXISTS idx_packet_history_gateway_stats ON packet_history(timestamp, gateway_id)"
-    )
-
-    # Additional proven performance indexes (20-40% improvements, cache-aware benchmarked)
-    _create_index(
-        "CREATE INDEX IF NOT EXISTS idx_packet_history_portnum_time ON packet_history(timestamp, portnum_name)"
-    )
-    _create_index(
-        "CREATE INDEX IF NOT EXISTS idx_packet_history_channel ON packet_history(channel_id)"
-    )
-    _create_index(
-        "CREATE INDEX IF NOT EXISTS idx_packet_history_to_node ON packet_history(to_node_id)"
-    )
-    _create_index(
-        "CREATE INDEX IF NOT EXISTS idx_packet_history_gateway_id ON packet_history(gateway_id)"
-    )
-    _create_index(
-        """CREATE INDEX IF NOT EXISTS idx_packet_history_direct_hops
-           ON packet_history(timestamp, from_node_id, gateway_id, hop_start, hop_limit)
-           WHERE hop_start = hop_limit"""
-    )
-    _create_index(
-        """CREATE INDEX IF NOT EXISTS idx_packet_history_relay_time
-           ON packet_history(timestamp, relay_node)
-           WHERE relay_node IS NOT NULL AND relay_node != 0"""
-    )
-
-    # Keep mesh_packet_id index (used for packet lookups)
-    _create_index(
-        "CREATE INDEX IF NOT EXISTS idx_packet_mesh_id ON packet_history(mesh_packet_id)"
-    )
-
-    # Drop old redundant indexes (composite indexes above can serve the same queries via leftmost prefix)
-    try:
-        cursor.execute("DROP INDEX IF EXISTS idx_packet_timestamp")
-    except Exception:
-        pass
-    try:
-        cursor.execute("DROP INDEX IF EXISTS idx_packet_from_node")
-    except Exception:
-        pass
-
-    _create_index("CREATE INDEX IF NOT EXISTS idx_node_hex_id ON node_info(hex_id)")
-
-    # Ensure primary_channel column exists for legacy databases
-    try:
-        cursor.execute("ALTER TABLE node_info ADD COLUMN primary_channel TEXT")
-        logging.info("Added primary_channel column to node_info table")
-        conn.commit()
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "duplicate column" in error_msg or "already exists" in error_msg:
-            logging.debug("primary_channel column already exists")
-            conn.rollback()
-        else:
-            logging.warning(f"Could not add primary_channel column: {e}")
-            conn.rollback()
-
-    # Index for faster channel filtering
-    _create_index(
-        "CREATE INDEX IF NOT EXISTS idx_node_primary_channel ON node_info(primary_channel)"
-    )
-
-    # Backfill primary_channel using last NODEINFO packets if missing
-    try:
-        cursor.execute(
-            """
-            UPDATE node_info
-            SET primary_channel = (
-                SELECT ph.channel_id
-                FROM packet_history ph
-                WHERE ph.from_node_id = node_info.node_id
-                  AND ph.portnum_name = 'NODEINFO_APP'
-                  AND ph.channel_id IS NOT NULL AND ph.channel_id != ''
-                ORDER BY ph.timestamp DESC
-                LIMIT 1
-            )
-            WHERE (primary_channel IS NULL OR primary_channel = '')
-        """
-        )
-        logging.info("Backfilled primary_channel values in node_info table")
-        conn.commit()
-    except Exception as e:
-        logging.warning(f"Could not backfill primary_channel column: {e}")
-        conn.rollback()
-
-    cursor.close()
-    put_db_connection(conn)
-    logging.info("Database initialized")
 
 
 def load_node_cache() -> None:
@@ -742,7 +498,9 @@ def update_node_cache(
                 final_short_name = (
                     short_name if short_name is not None else existing["short_name"]
                 )
-                final_hw_model = hw_model if hw_model is not None else existing["hw_model"]
+                final_hw_model = (
+                    hw_model if hw_model is not None else existing["hw_model"]
+                )
                 final_role = role if role is not None else existing["role"]
                 final_is_licensed = (
                     is_licensed if is_licensed is not None else existing["is_licensed"]
@@ -952,15 +710,18 @@ def log_packet_to_database(
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         try:
-            with TRACER.start_as_current_span("db.insert.packet_history") as span, DB_QUERY_DURATION.labels(
-                "insert_packet_history"
-            ).time():
+            with (
+                TRACER.start_as_current_span("db.insert.packet_history") as span,
+                DB_QUERY_DURATION.labels("insert_packet_history").time(),
+            ):
                 if span is not None:
                     span.set_attribute("db.topic", topic)
                     span.set_attribute("db.gateway_id", gateway_id or "")
                     span.set_attribute("db.channel_id", channel_id or "")
                     span.set_attribute("db.portnum_name", portnum_name or "")
-                    span.set_attribute("db.processed_successfully", processed_successfully)
+                    span.set_attribute(
+                        "db.processed_successfully", processed_successfully
+                    )
 
                 cursor.execute(
                     """
@@ -1160,7 +921,9 @@ def get_node_statistics() -> dict[str, Any]:
             total_nodes = cursor.fetchone()["count"]
 
             # Nodes with names
-            cursor.execute("SELECT COUNT(*) as count FROM node_info WHERE long_name IS NOT NULL")
+            cursor.execute(
+                "SELECT COUNT(*) as count FROM node_info WHERE long_name IS NOT NULL"
+            )
             nodes_with_long_names = cursor.fetchone()["count"]
 
             # Recent packet senders (last 24 hours)
@@ -1254,7 +1017,9 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
     )
 
     with span_cm as span:
-        logging.debug(f"Received message on topic {msg.topic}: {len(msg.payload)} bytes")
+        logging.debug(
+            f"Received message on topic {msg.topic}: {len(msg.payload)} bytes"
+        )
 
         with ingest_stats_lock:
             ingest_stats["received"] += 1
@@ -1520,8 +1285,14 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
                 position_data = mesh_pb2.Position()
                 position_data.ParseFromString(mesh_packet.decoded.payload)
 
-                lat = position_data.latitude_i / 1e7 if position_data.latitude_i else None
-                lon = position_data.longitude_i / 1e7 if position_data.longitude_i else None
+                lat = (
+                    position_data.latitude_i / 1e7 if position_data.latitude_i else None
+                )
+                lon = (
+                    position_data.longitude_i / 1e7
+                    if position_data.longitude_i
+                    else None
+                )
                 alt = position_data.altitude if position_data.altitude else None
 
                 from_node_display = get_node_display_name(from_node_id_numeric)
@@ -1549,7 +1320,9 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
                 logging.warning(
                     f"MAP_REPORT from {from_node_display}{via_mqtt_str}: Failed to parse position data: {e}"
                 )
-                processed_successfully = True  # Still mark as processed to store the packet
+                processed_successfully = (
+                    True  # Still mark as processed to store the packet
+                )
 
         else:
             port_name = portnums_pb2.PortNum.Name(mesh_packet.decoded.portnum)
@@ -1629,7 +1402,9 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
             pass
 
         if span is not None:
-            span.set_attribute("malla.packet.processed_successfully", processed_successfully)
+            span.set_attribute(
+                "malla.packet.processed_successfully", processed_successfully
+            )
             span.set_attribute("malla.packet.parsing_error", parsing_error or "")
             if message_type is not None:
                 span.set_attribute("malla.packet.message_type", message_type)
@@ -1649,7 +1424,9 @@ def on_disconnect(
 
         # Implement configurable exponential backoff retry logic
         for attempt in range(MQTT_RECONNECT_MAX_RETRIES):
-            delay = min(MQTT_RECONNECT_BASE_DELAY * (2**attempt), MQTT_RECONNECT_MAX_DELAY)
+            delay = min(
+                MQTT_RECONNECT_BASE_DELAY * (2**attempt), MQTT_RECONNECT_MAX_DELAY
+            )
             logging.info(
                 f"Reconnection attempt {attempt + 1}/{MQTT_RECONNECT_MAX_RETRIES} in {delay} seconds..."
             )
@@ -1695,11 +1472,12 @@ def main() -> None:
 
     # Initialize database and load node cache
     logging.info("Initializing database...")
-    init_database()
     load_node_cache()
 
     # Initialize MQTT Client
-    mqtt_client = mqtt.Client(CallbackAPIVersion.VERSION2, clean_session=MQTT_CLEAN_SESSION)
+    mqtt_client = mqtt.Client(
+        CallbackAPIVersion.VERSION2, clean_session=MQTT_CLEAN_SESSION
+    )
 
     # Configure TLS if enabled
     if MQTT_TLS_ENABLED:
