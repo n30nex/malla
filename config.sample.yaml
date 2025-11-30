@@ -70,6 +70,14 @@ debug: false
 #   Multiple keys: "1PG7OiApB1nwvP+rz05pAQ==,AQ4GCAwQFBgcICQoLDA0ODw=,another+base64+key=="
 # default_channel_key: "1PG7OiApB1nwvP+rz05pAQ=="
 
+# Ignored node IDs - packets from these nodes will be dropped and not saved to database
+# Supports comma-separated list of node IDs in decimal or hex format
+# Examples:
+#   Decimal IDs:   "1127955948,987654321"
+#   Hex IDs:       "!433b3dec,!abcdef12"
+#   Mixed format:  "1127955948,!433b3dec,987654321"
+# ignored_node_ids: ""
+
 # Number of hours after which to delete old data (0 = never delete)
 # data_retention_hours: 0
 # Cleanup interval in seconds (default: 3600)

@@ -66,6 +66,10 @@ class AppConfig:
     # Supports comma-separated list of base64-encoded keys
     default_channel_key: str = "1PG7OiApB1nwvP+rz05pAQ=="
 
+    # Ignored node IDs - packets from these nodes will be dropped and not saved to database
+    # Supports comma-separated list of node IDs (decimal or hex format like "1127955948" or "!433b3dec" or "433b3dec")
+    ignored_node_ids: str = ""
+
     # Logging
     log_level: str = "INFO"
 
@@ -102,6 +106,47 @@ class AppConfig:
 
         # Filter out empty keys
         return [key for key in keys if key]
+
+    def get_ignored_node_ids(self) -> set[int]:
+        """Parse and return set of ignored node IDs from the configuration.
+
+        Supports comma-separated list of node IDs in decimal or hex format.
+        Hex IDs can be prefixed with '!' or not (e.g., "!433b3dec" or "433b3dec").
+        Decimal IDs are also supported (e.g., "1127955948").
+        Empty values are filtered out.
+
+        Returns:
+            Set of numeric node IDs to ignore
+        """
+        if not self.ignored_node_ids:
+            return set()
+
+        ignored_ids = set()
+        # Split by comma and strip whitespace
+        node_id_strings = [s.strip() for s in self.ignored_node_ids.split(",")]
+
+        for node_id_str in node_id_strings:
+            if not node_id_str:
+                continue
+
+            try:
+                # Try parsing as hex first (with or without ! prefix)
+                if node_id_str.startswith("!"):
+                    node_id_str = node_id_str[1:]
+                # Try hex
+                if all(c in "0123456789abcdefABCDEF" for c in node_id_str):
+                    node_id = int(node_id_str, 16)
+                    ignored_ids.add(node_id)
+                else:
+                    # Try decimal
+                    node_id = int(node_id_str)
+                    ignored_ids.add(node_id)
+            except ValueError:
+                logger.warning(
+                    f"Invalid node ID format in ignored_node_ids: {node_id_str}. Skipping."
+                )
+
+        return ignored_ids
 
 
 # ---------------------------------------------------------------------------

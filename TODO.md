@@ -30,8 +30,8 @@
 
 ### Database Performance
 - **Status**: Queries are optimized with time windows, indexes, and DISTINCT ON patterns. ✅
-- **Pending**: Validate against very heavy queries (10M+ rows) and consider SQL window functions for complex aggregations on large datasets.
-- **Note**: Current optimizations should handle most production workloads. This is for future scaling.
+- **Status**: Grouped packet queries use optimized time-windowed approach with smaller fetch limits. ✅
+- **Note**: SQL window functions (ROW_NUMBER, RANK) could further optimize grouping queries on very large datasets (10M+ rows) - future enhancement when needed.
 
 ### Gateway Analytics
 - **Status**: Hop-limit filtering uses index-friendly patterns (`(hop_start - hop_limit) = 0`). ✅
@@ -45,19 +45,17 @@
 ## Medium Priority - Remaining
 
 ### Developer Experience
-- **Status**: Enhanced CI workflow created in `.github/workflows/ci-enhanced.yml`. ✅
-- **Pending**: Activate CI/CD pipeline (connect to GitHub repository, configure secrets if needed).
+- **Status**: Enhanced CI workflow created in `.github/workflows/ci-enhanced.yml` with lint, test, security, and performance jobs. ✅
+- **Note**: CI/CD pipeline is ready - just needs to be connected to GitHub repository (configure secrets if needed for external services).
 
 ## Tests - Remaining
 
 ### Test Coverage
 - **Status**: Integration tests use PostgreSQL fixtures. ✅
-- **Pending**: Add comprehensive test coverage for:
-  - Capture pipeline end-to-end
-  - Packet grouping logic
-  - Gateway comparison functionality
-  - Traceroute parsing
-  - Node location queries
+- **Status**: Added `test_capture_pipeline.py` with tests for capture pipeline, packet grouping, and gateway comparison. ✅
+- **Pending**: Add more coverage for:
+  - Traceroute parsing edge cases
+  - Node location query edge cases
   - Gunicorn/health endpoint smoke tests
 
 ### Test Infrastructure
@@ -82,7 +80,8 @@
 ## Cleanup / Tech Debt - Low Priority
 
 ### Code Organization
-- **Pending**: Move long scripts under `tools/` directory and mark as dev-only.
+- **Status**: Development scripts are organized in `tools/` directory with README. ✅
+- **Status**: Entry point scripts (`malla-capture`, `malla-web`, `malla-web-gunicorn`, `run_tests.py`) remain in root for convenience. ✅
 - **Pending**: Final cleanup of any remaining SQLite references in docs/tests (most already cleaned up).
 
 ## Summary

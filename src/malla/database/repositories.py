@@ -1960,18 +1960,42 @@ class NodeRepository:
             part1_results = cursor.fetchall()
 
             # Part 2: Packets from these gateway nodes received directly by other gateways
-            gw_id_placeholders = ",".join(["%s"] * len(gateway_node_ids))
-            candidates_query_part2 = f"""
-            SELECT DISTINCT p.gateway_id, p.from_node_id
-            FROM packet_history p
-            WHERE p.from_node_id IN ({gw_id_placeholders})
-                AND p.gateway_id IS NOT NULL
-                AND p.gateway_id LIKE '!%'
-                AND (p.hop_start - p.hop_limit) = 0
-            """
+            # Only execute if we have gateway_node_ids to query
+            if gateway_node_ids:
+                try:
+                    gw_id_placeholders = ",".join(["%s"] * len(gateway_node_ids))
+                    candidates_query_part2 = f"""
+                    SELECT DISTINCT p.gateway_id, p.from_node_id
+                    FROM packet_history p
+                    WHERE p.from_node_id IN ({gw_id_placeholders})
+                        AND p.gateway_id IS NOT NULL
+                        AND p.gateway_id LIKE '!%'
+                        AND (p.hop_start - p.hop_limit) = 0
+                    """
 
-            cursor.execute(candidates_query_part2, tuple(gateway_node_ids))
-            part2_results = cursor.fetchall()
+                    params = tuple(gateway_node_ids)
+                    # Ensure we have the right number of placeholders
+                    expected_placeholders = len(gateway_node_ids)
+                    actual_placeholders = candidates_query_part2.count("%s")
+                    if expected_placeholders != actual_placeholders:
+                        logger.error(
+                            f"Placeholder mismatch: expected {expected_placeholders}, found {actual_placeholders} in query"
+                        )
+                        raise ValueError(
+                            f"Query placeholder count mismatch: {expected_placeholders} params but {actual_placeholders} placeholders"
+                        )
+
+                    cursor.execute(candidates_query_part2, params)
+                    part2_results = cursor.fetchall()
+                except Exception as e:
+                    logger.error(
+                        f"Error executing part2 query for gateways {gateway_node_ids}: {e}"
+                    )
+                    logger.debug(f"Query: {candidates_query_part2}")
+                    logger.debug(f"Params: {params if 'params' in locals() else 'N/A'}")
+                    part2_results = []
+            else:
+                part2_results = []
 
             # Initialize nested structure: {gateway_id: {last_byte: set(node_ids)}}
             candidates_by_gateway: dict[int, dict[int, set[int]]] = {}

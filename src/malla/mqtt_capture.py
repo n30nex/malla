@@ -111,6 +111,9 @@ DATABASE_FILE: str = _cfg.database_file
 # Supports multiple comma-separated keys
 DECRYPTION_KEYS: list[str] = _cfg.get_decryption_keys()
 
+# Ignored node IDs - packets from these nodes will be dropped
+IGNORED_NODE_IDS: set[int] = _cfg.get_ignored_node_ids()
+
 # Data retention settings
 DATA_RETENTION_HOURS: int = _cfg.data_retention_hours
 DATA_CLEANUP_INTERVAL_SECONDS: int = max(
@@ -217,7 +220,7 @@ def _init_metrics():
     global _metrics_registered, PACKETS_RECEIVED, PACKETS_PARSED, PACKETS_PARSE_FAILED
     global PACKETS_DECRYPT_SUCCESS, PACKETS_DECRYPT_FAILED, ACTIVE_THREADS
     global DB_QUERY_DURATION, PACKET_PROCESS_DURATION, CLEANUP_FAILURES
-    global MQTT_CONSUMER_LAG, TOPIC_PACKETS_SUCCESS, TOPIC_PACKETS_ERROR
+    global MQTT_CONSUMER_LAG, TOPIC_PACKETS_SUCCESS, TOPIC_PACKETS_ERROR, PACKETS_IGNORED
 
     if _metrics_registered:
         return
@@ -264,6 +267,10 @@ def _init_metrics():
         "malla_topic_packets_error_total",
         "Packets that failed to process per topic",
         ["topic", "error_type"],
+    )
+    PACKETS_IGNORED = Counter(
+        "malla_packets_ignored_total",
+        "Packets dropped from ignored node IDs",
     )
 
     _metrics_registered = True
@@ -1162,6 +1169,18 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
         mesh_packet = service_envelope.packet
 
         from_node_id_numeric = getattr(mesh_packet, "from")
+
+        # Check if this node is in the ignore list - drop packet early if so
+        if from_node_id_numeric and from_node_id_numeric in IGNORED_NODE_IDS:
+            logging.debug(
+                f"Ignoring packet from node {from_node_id_numeric} (in ignored_node_ids list)"
+            )
+            PACKETS_IGNORED.inc()
+            if span is not None:
+                span.set_attribute("malla.packet.ignored", True)
+                span.set_attribute("malla.packet.ignored_node_id", from_node_id_numeric)
+            return  # Drop packet, don't save to database
+
         to_node_id_numeric = mesh_packet.to
 
         # Try to decrypt the packet if it appears to be encrypted
