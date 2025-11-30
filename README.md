@@ -160,5 +160,23 @@ make typecheck     # Run basedpyright
 make check         # Run all checks (lint + typecheck)
 ```
 
+## Production Deployment
+
+For production deployment, see [Production Deployment Guide](docs/production-deployment.md).
+
+**Important Security Notes**:
+- Set `MALLA_SECRET_KEY` to a strong random value (minimum 32 characters)
+- Do not use default secret key in production
+- Configure proper firewall rules
+- Use reverse proxy with SSL/TLS
+- Set up database backups
+
+## Documentation
+
+- [Architecture Documentation](docs/architecture.md) - System design and component overview
+- [Production Deployment Guide](docs/production-deployment.md) - Production setup and configuration
+- [Troubleshooting Guide](docs/troubleshooting.md) - Common issues and solutions
+- [Monitoring Guide](docs/monitoring.md) - Metrics, tracing, and observability
+
 ## License
 MIT License. See `LICENSE` for details.

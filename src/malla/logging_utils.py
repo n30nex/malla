@@ -38,7 +38,26 @@ def setup_logging(level: str | int | None = None, extra_handlers: Iterable[loggi
         extra_handlers: Optional additional handlers to attach.
     """
 
-    formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    # Enhanced formatter with optional trace/span context
+    class StructuredFormatter(logging.Formatter):
+        """Formatter that includes trace context when available."""
+
+        def format(self, record: logging.LogRecord) -> str:
+            # Add trace context if available (from OpenTelemetry)
+            trace_id = getattr(record, "otelTraceID", None)
+            span_id = getattr(record, "otelSpanID", None)
+
+            if trace_id or span_id:
+                context_parts = []
+                if trace_id:
+                    context_parts.append(f"trace_id={trace_id}")
+                if span_id:
+                    context_parts.append(f"span_id={span_id}")
+                record.msg = f"[{' '.join(context_parts)}] {record.msg}"
+
+            return super().format(record)
+
+    formatter = StructuredFormatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
 
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(logging.DEBUG)

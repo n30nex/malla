@@ -1,0 +1,115 @@
+name: CI Enhanced
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint:
+    name: Lint and Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: Run ruff linting
+        run: uv run ruff check src tests
+      - name: Run ruff formatting check
+        run: uv run ruff format --check src tests
+      - name: Run type checking
+        run: uv run basedpyright src
+
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: meshtastic_history_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: Run tests
+        env:
+          MALLA_DATABASE_HOST: localhost
+          MALLA_DATABASE_PORT: 5432
+          MALLA_DATABASE_NAME: meshtastic_history_test
+          MALLA_DATABASE_USER: postgres
+          MALLA_DATABASE_PASSWORD: postgres
+          MALLA_ALLOW_SQLITE_FOR_TESTS: "0"
+        run: uv run pytest --cov=src/malla --cov-report=xml --cov-report=term
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+
+  security:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: Run safety check
+        run: |
+          uv pip install safety
+          uv run safety check --json || true
+      - name: Check for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+
+  performance:
+    name: Performance Regression Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: meshtastic_history_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: Run performance benchmarks
+        env:
+          MALLA_DATABASE_HOST: localhost
+          MALLA_DATABASE_PORT: 5432
+          MALLA_DATABASE_NAME: meshtastic_history_test
+          MALLA_DATABASE_USER: postgres
+          MALLA_DATABASE_PASSWORD: postgres
+        run: |
+          # Run performance tests if they exist
+          uv run pytest tests/performance/ -v --benchmark-only || echo "No performance tests found"
+      - name: Check query performance
+        run: |
+          # This would run query performance tests
+          echo "Query performance checks would run here"

@@ -60,16 +60,27 @@ check: lint test ## Run all checks (lint + test)
 
 ci: install-dev check ## Run CI pipeline locally
 
-dev-all: ## Run both capture and web services
-	@echo "Starting Malla services..."
-	@echo "Capture on port 9100 (metrics), Web on port 5001"
-	uv run malla-capture & echo $$! > .capture.pid
-	sleep 2
-	uv run malla-web & echo $!$! > .web.pid
+dev-up: ## Start PostgreSQL and run both capture and web services
+	@echo "Starting Malla development environment..."
+	@echo "1. Starting PostgreSQL..."
+	@docker compose up -d postgres || echo "PostgreSQL already running or Docker not available"
+	@sleep 2
+	@echo "2. Starting capture service (metrics on port 9100)..."
+	@uv run malla-capture & echo $$! > .capture.pid
+	@sleep 2
+	@echo "3. Starting web UI (http://localhost:5001)..."
+	@uv run malla-web & echo $$! > .web.pid
+	@echo ""
+	@echo "Services started! Use 'make dev-stop' to stop them."
+	@echo "View logs: tail -f .capture.log .web.log (if logging to files)"
+
+dev-all: dev-up ## Alias for dev-up
 
 dev-stop: ## Stop background services
+	@echo "Stopping Malla services..."
 	@if [ -f .capture.pid ]; then kill `cat .capture.pid` 2>/dev/null || true; rm .capture.pid; fi
 	@if [ -f .web.pid ]; then kill `cat .web.pid` 2>/dev/null || true; rm .web.pid; fi
+	@echo "Services stopped."
 
 metrics: ## View Prometheus metrics from capture
 	curl -s http://localhost:9100/metrics

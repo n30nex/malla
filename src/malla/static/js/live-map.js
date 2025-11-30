@@ -524,8 +524,23 @@
     }
   }
 
+  function showLoading() {
+    const loadingEl = document.getElementById("live-map-loading");
+    if (loadingEl) loadingEl.style.display = "flex";
+    const mapEl = document.getElementById("live-map");
+    if (mapEl) mapEl.style.opacity = "0.5";
+  }
+
+  function hideLoading() {
+    const loadingEl = document.getElementById("live-map-loading");
+    if (loadingEl) loadingEl.style.display = "none";
+    const mapEl = document.getElementById("live-map");
+    if (mapEl) mapEl.style.opacity = "1";
+  }
+
   async function loadLocations() {
     try {
+      showLoading();
       // Precache all known node locations so packet animations can render immediately
       const resp = await fetch("/api/locations?span=all");
       const data = await resp.json();
@@ -567,8 +582,10 @@
           gatewaySelect.appendChild(opt);
         });
       }
+      hideLoading();
     } catch (e) {
       console.error("Failed to load locations", e);
+      hideLoading();
     }
   }
 

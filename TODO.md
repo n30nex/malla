@@ -28,12 +28,12 @@
 ### Telemetry/Metrics
 - **Status**: Capture service has DB insert histograms (`DB_QUERY_DURATION`) and OTLP spans (`TRACER.start_as_current_span` in `mqtt_capture.py` line 888). ✅
 - **Status**: Web UI now has `/metrics` endpoint exposing Prometheus metrics for all HTTP/API requests. ✅
-- **Pending**: Add DB query timing metrics/spans to web UI repositories (similar to capture service `DB_QUERY_DURATION`).
+- **Status**: DB query timing metrics added to all web UI repository methods (22 methods now instrumented with `@track_query_time`). ✅
 
 ### MQTT Capture
 - **Status**: TLS/QoS/keepalive/clean-session and configurable reconnect backoff shipped. ✅
-- **Pending**: Richer metrics (latency/lag) and optional per-topic QoS tuning.
-- **Enhancement**: Capture consumer lag metric (MQTT receive time vs DB commit) and per-topic success/error counters to spot bad topics rapidly.
+- **Status**: Consumer lag metric (`malla_mqtt_consumer_lag_seconds`) and per-topic success/error counters (`malla_topic_packets_success_total`, `malla_topic_packets_error_total`) implemented. ✅
+- **Pending**: Optional per-topic QoS tuning (future enhancement).
 
 ### Database
 - **Status**: Indexes for `channel_id`/`gateway_id`/`to_node_id`/`portnum_name` created via migration. ✅
@@ -42,11 +42,11 @@
 
 ### Node/Gateway Caching
 - **Status**: Background cleanup exists in `utils/node_utils.py`. ✅
-- **Pending**: Centralized TTL/refresh strategy to reduce repeated lookups.
+- **Status**: Centralized TTL/refresh strategy implemented in `utils/cache_manager.py` with stale-while-revalidate pattern. ✅
 
 ### Data Retention
 - **Status**: Interval configurable and skipped when disabled. ✅
-- **Pending**: Emit metrics/alerts on failures (currently only logs errors in `mqtt_capture.py` line 1056).
+- **Status**: Metrics emitted for cleanup failures via `malla_data_cleanup_failures_total` counter. ✅
 
 ### Gateway Analytics
 - **Pending**: Ensure hop-limit filtering and joins remain performant on large datasets (may need temp/materialized views).
@@ -54,17 +54,15 @@
 ## Medium Priority
 
 ### Code Quality / Cleanup
-- **SQLite references in code**: Remove or update docstrings/comments mentioning SQLite:
-  - `src/malla/telemetry.py` line 26: "SQLite3 database operations (optional when using SQLite backend)"
-  - `src/malla/mqtt_capture.py` line 16: "python mqtt_to_sqlite.py" (outdated usage comment)
-  - `src/malla/__init__.py` line 2: "Malla - Meshtastic MQTT to SQLite capture..." (outdated description)
-- **Unused dependency**: `opentelemetry-instrumentation-sqlite3` in `pyproject.toml` line 51 (not needed for PostgreSQL-only runtime).
-- **Standardize logging**: Add trace/span IDs and request_id across capture/web; ensure stdout-only formatting matches OTLP expectations.
+- **Status**: SQLite references in docstrings already cleaned up (verified). ✅
+- **Status**: Unused `opentelemetry-instrumentation-sqlite3` dependency not found in `pyproject.toml` (already removed). ✅
+- **Status**: Logging standardized with trace/span IDs via OpenTelemetry instrumentation. ✅
 
 ## Developer Experience
 
-- **Pending**: One-command dev stack (PG only) and `dev.env`; clearer config validation messaging; script/Make target to run capture + web under `uv`; CI wiring for lint/tests; README refresh for PG-only + test posture.
-- **Enhancement**: Add `make dev-up` (uv run web + capture) with a seeded Postgres service, plus a `dev.env` template that matches `config.sample.yaml` and auto-exports MALLA vars.
+- **Status**: `make dev-up` command added to start PostgreSQL and run both capture + web services. ✅
+- **Status**: `dev.env.example` template updated with correct `MALLA_DATABASE_URL` and `MALLA_SERVICE_TYPE` variables. ✅
+- **Pending**: CI wiring for lint/tests (enhanced CI workflow already created in `.github/workflows/ci-enhanced.yml`).
 
 ## Tests
 

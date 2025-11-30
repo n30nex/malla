@@ -33,6 +33,7 @@ Data Cleanup:
 import base64
 import hashlib
 import logging
+import os
 import socket
 import threading
 import time
@@ -72,6 +73,7 @@ from malla.config import (  # Import here to avoid circular import issues
     validate_config,
 )
 from malla.database.connection import get_db_connection, put_db_connection
+from malla.exceptions import DatabaseError, MQTTError
 from malla.logging_utils import setup_logging
 from malla.telemetry import setup_telemetry
 
@@ -133,9 +135,67 @@ if _cfg.otlp_endpoint:
 
 # --- Global Variables ---
 db_lock = threading.Lock()  # Thread lock for database access
-node_cache: dict[
-    int, dict[str, Any]
-] = {}  # In-memory cache: {node_id_numeric: {'hex_id': '!abc123', 'long_name': 'Name', 'short_name': 'Short', 'last_updated': timestamp}}
+
+# LRU cache for node information with size limit to prevent memory growth
+class LRUNodeCache:
+    """LRU cache for node information with size limit."""
+
+    def __init__(self, max_size: int = 10000):
+        from collections import OrderedDict
+
+        self._cache: OrderedDict[int, dict[str, Any]] = OrderedDict()
+        self._max_size = max_size
+        self._lock = threading.Lock()
+
+    def __getitem__(self, key: int) -> dict[str, Any]:
+        with self._lock:
+            if key not in self._cache:
+                raise KeyError(key)
+            # Move to end (most recently used)
+            self._cache.move_to_end(key)
+            return self._cache[key]
+
+    def __setitem__(self, key: int, value: dict[str, Any]) -> None:
+        with self._lock:
+            if key in self._cache:
+                # Update existing and move to end
+                self._cache[key] = value
+                self._cache.move_to_end(key)
+            else:
+                # Add new entry
+                if len(self._cache) >= self._max_size:
+                    # Remove oldest (first) item
+                    self._cache.popitem(last=False)
+                self._cache[key] = value
+
+    def __contains__(self, key: int) -> bool:
+        with self._lock:
+            return key in self._cache
+
+    def get(self, key: int, default: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+            return default
+
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._cache)
+
+    def items(self):
+        with self._lock:
+            return list(self._cache.items())
+
+
+# Initialize LRU cache with configurable max size (default 10k nodes)
+NODE_CACHE_MAX_SIZE = int(os.getenv("MALLA_NODE_CACHE_MAX_SIZE", "10000"))
+node_cache = LRUNodeCache(max_size=NODE_CACHE_MAX_SIZE)
+
 cleanup_thread: threading.Thread | None = None  # Background thread for data cleanup
 stop_cleanup = threading.Event()  # Event to signal cleanup thread to stop
 ingest_stats_lock = threading.Lock()
@@ -157,6 +217,7 @@ def _init_metrics():
     global _metrics_registered, PACKETS_RECEIVED, PACKETS_PARSED, PACKETS_PARSE_FAILED
     global PACKETS_DECRYPT_SUCCESS, PACKETS_DECRYPT_FAILED, ACTIVE_THREADS
     global DB_QUERY_DURATION, PACKET_PROCESS_DURATION, CLEANUP_FAILURES
+    global MQTT_CONSUMER_LAG, TOPIC_PACKETS_SUCCESS, TOPIC_PACKETS_ERROR
 
     if _metrics_registered:
         return
@@ -188,6 +249,21 @@ def _init_metrics():
     CLEANUP_FAILURES = Counter(
         "malla_data_cleanup_failures_total",
         "Total number of data cleanup failures",
+    )
+    MQTT_CONSUMER_LAG = Histogram(
+        "malla_mqtt_consumer_lag_seconds",
+        "Time between MQTT message receive and database commit (consumer lag)",
+        buckets=(0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0),
+    )
+    TOPIC_PACKETS_SUCCESS = Counter(
+        "malla_topic_packets_success_total",
+        "Packets successfully processed per topic",
+        ["topic"],
+    )
+    TOPIC_PACKETS_ERROR = Counter(
+        "malla_topic_packets_error_total",
+        "Packets that failed to process per topic",
+        ["topic", "error_type"],
     )
 
     _metrics_registered = True
@@ -399,7 +475,7 @@ def load_node_cache() -> None:
             )
 
             rows = cursor.fetchall()
-            node_cache = {}
+            node_cache.clear()  # Clear existing cache
 
             for row in rows:
                 node_id = row["node_id"]
@@ -638,9 +714,21 @@ def log_packet_to_database(
     processed_successfully: bool = True,
     raw_service_envelope_data: bytes | None = None,
     parsing_error: str | None = None,
+    receive_time: float | None = None,
 ) -> None:
-    """Log received packet to database for history tracking."""
+    """Log received packet to database for history tracking.
+
+    Args:
+        topic: MQTT topic the packet was received on
+        service_envelope: Parsed ServiceEnvelope protobuf (may be None)
+        mesh_packet: Parsed MeshPacket protobuf (may be None)
+        processed_successfully: Whether packet was successfully parsed
+        raw_service_envelope_data: Raw protobuf bytes
+        parsing_error: Error message if parsing failed
+        receive_time: Timestamp when message was received from MQTT (for lag calculation)
+    """
     current_time = time.time()
+    db_commit_time = current_time
 
     from_node_id = getattr(mesh_packet, "from", None) if mesh_packet else None
     to_node_id = getattr(mesh_packet, "to", None) if mesh_packet else None
@@ -767,6 +855,15 @@ def log_packet_to_database(
                 )
 
                 conn.commit()
+                db_commit_time = time.time()
+
+                # Calculate and record consumer lag (receive time to DB commit time)
+                if receive_time is not None:
+                    lag = db_commit_time - receive_time
+                    try:
+                        MQTT_CONSUMER_LAG.observe(lag)
+                    except Exception:
+                        pass  # Metrics are optional; never block processing
         finally:
             try:
                 cursor.close()
@@ -1004,6 +1101,7 @@ def on_connect(
 def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
     """Callback for when a PUBLISH message is received from the server."""
     process_start = time.perf_counter()
+    receive_time = time.time()  # Track when message was received for lag calculation
     processed_successfully = False
     parsing_error = None
     message_type = None
@@ -1353,6 +1451,11 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
         with ingest_stats_lock:
             ingest_stats["parse_failed"] += 1
         PACKETS_PARSE_FAILED.inc()
+        # Record parse error per topic
+        try:
+            TOPIC_PACKETS_ERROR.labels(topic=msg.topic, error_type="parse").inc()
+        except Exception:
+            pass
     except Exception as e:
         parsing_error = f"Parsing error: {str(e)}"
         logging.error(
@@ -1362,6 +1465,11 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
         with ingest_stats_lock:
             ingest_stats["parse_failed"] += 1
         PACKETS_PARSE_FAILED.inc()
+        # Record parse error per topic
+        try:
+            TOPIC_PACKETS_ERROR.labels(topic=msg.topic, error_type="parse").inc()
+        except Exception:
+            pass
 
     try:
         # Always log packet to database, regardless of parsing success
@@ -1373,9 +1481,28 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
                 processed_successfully,
                 raw_service_envelope_data,
                 parsing_error,
+                receive_time=receive_time,
             )
+            # Record success metric per topic
+            try:
+                TOPIC_PACKETS_SUCCESS.labels(topic=msg.topic).inc()
+            except Exception:
+                pass  # Metrics are optional
+        except DatabaseError:
+            # Record database error per topic
+            try:
+                TOPIC_PACKETS_ERROR.labels(topic=msg.topic, error_type="database").inc()
+            except Exception:
+                pass
+            raise  # Re-raise database errors
         except Exception as db_error:
-            logging.error(f"Failed to log packet to database: {db_error}")
+            logging.error(f"Failed to log packet to database: {db_error}", exc_info=True)
+            # Record general error per topic
+            try:
+                TOPIC_PACKETS_ERROR.labels(topic=msg.topic, error_type="processing").inc()
+            except Exception:
+                pass
+            # Don't raise here - we want to continue processing other packets
 
         # Log statistics for different message types
         if message_type and processed_successfully:

@@ -15,6 +15,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
 
   malla-web:
     build: .
@@ -28,6 +36,7 @@ services:
     ports:
       - "${MALLA_WEB_PORT:-5008}:5008"
     environment:
+      - MALLA_SERVICE_TYPE=web
       - MALLA_HOST=0.0.0.0
       - MALLA_PORT=5008
       - MALLA_DATABASE_HOST=postgres
@@ -44,6 +53,20 @@ services:
       # Optional: mount your own config file (uncomment if you have one)
       # - ./config.yaml:/app/config.yaml:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5008/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,6 +77,7 @@ services:
     image: malla:local
     command: ["/app/.venv/bin/malla-capture"]
     environment:
+      - MALLA_SERVICE_TYPE=capture
       - MALLA_DATABASE_HOST=postgres
       - MALLA_DATABASE_PORT=5432
       - MALLA_DATABASE_NAME=${POSTGRES_DB:-meshtastic_history}
@@ -68,11 +92,27 @@ services:
       - MALLA_MQTT_TOPIC_PREFIX=${MALLA_MQTT_TOPIC_PREFIX:-msh}
       - MALLA_MQTT_TOPIC_SUFFIX=${MALLA_MQTT_TOPIC_SUFFIX:-/+/+/+/#}
       - MALLA_DEFAULT_CHANNEL_KEY=${MALLA_DEFAULT_CHANNEL_KEY:-}
+      - MALLA_METRICS_ENABLED=${MALLA_METRICS_ENABLED:-true}
+      - MALLA_METRICS_PORT=9100
     volumes:
       - malla_data:/app/data
       # Optional: mount your own config file (uncomment if you have one)
       # - ./config.yaml:/app/config.yaml:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/metrics').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
     depends_on:
       postgres:
         condition: service_healthy

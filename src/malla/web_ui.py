@@ -237,6 +237,51 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     logger.info("Registering application routes")
     register_routes(app)
 
+    # Register global error handlers for consistent error responses
+    from flask import jsonify
+
+    from .exceptions import (
+        ConfigurationError,
+        DatabaseError,
+        MallaError,
+        ValidationError,
+    )
+
+    @app.errorhandler(ValidationError)
+    def handle_validation_error(e: ValidationError):
+        """Handle validation errors with 400 status."""
+        logger.warning(f"Validation error: {e}")
+        return jsonify({"error": "Validation failed", "message": str(e)}), 400
+
+    @app.errorhandler(ConfigurationError)
+    def handle_configuration_error(e: ConfigurationError):
+        """Handle configuration errors with 500 status."""
+        logger.error(f"Configuration error: {e}")
+        return jsonify({"error": "Configuration error", "message": str(e)}), 500
+
+    @app.errorhandler(DatabaseError)
+    def handle_database_error(e: DatabaseError):
+        """Handle database errors with 500 status."""
+        logger.error(f"Database error: {e}", exc_info=True)
+        return jsonify({"error": "Database error", "message": "An internal error occurred"}), 500
+
+    @app.errorhandler(MallaError)
+    def handle_malla_error(e: MallaError):
+        """Handle general Malla errors with 500 status."""
+        logger.error(f"Application error: {e}", exc_info=True)
+        return jsonify({"error": "Application error", "message": str(e)}), 500
+
+    @app.errorhandler(404)
+    def handle_not_found(e):
+        """Handle 404 errors."""
+        return jsonify({"error": "Not found", "message": "The requested resource was not found"}), 404
+
+    @app.errorhandler(500)
+    def handle_internal_error(e):
+        """Handle 500 errors."""
+        logger.error("Internal server error", exc_info=True)
+        return jsonify({"error": "Internal server error", "message": "An unexpected error occurred"}), 500
+
     # Add health check endpoint
     @app.route("/health")
     def health_check():

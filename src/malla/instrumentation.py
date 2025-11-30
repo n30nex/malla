@@ -29,8 +29,19 @@ def _endpoint_label() -> str:
 
 
 def _before_request() -> None:
-    """Record start time of request."""
+    """Record start time of request and add trace context."""
     g.request_start_time = time.perf_counter()
+
+    # Add trace context to Flask g for logging
+    try:
+        span = trace.get_current_span()
+        if span:
+            span_context = span.get_span_context()
+            if span_context.is_valid:
+                g.trace_id = format(span_context.trace_id, "032x")
+                g.span_id = format(span_context.span_id, "016x")
+    except Exception:
+        pass  # Trace context not available
 
 
 def _after_request(response: Response) -> Response:

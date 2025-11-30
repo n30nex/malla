@@ -951,11 +951,38 @@ def api_locations():
     """
     API endpoint for node location data with network topology.
     Returns up to 14 days of data for client-side filtering.
+
+    Response is cached for 30 seconds to improve performance.
     """
     import time
 
+    from flask import g
+
+    from ..cache import cache_result
+
     start_time_perf = time.time()
     logger.info("API locations endpoint accessed")
+
+    # Create cache key from request parameters
+    cache_key_parts = [
+        request.args.get("span", ""),
+        request.args.get("gateway_id", ""),
+        request.args.get("search", ""),
+    ]
+    cache_key = "_".join(str(p) for p in cache_key_parts)
+
+    # Check cache (30 second TTL)
+    cache_ttl = 30
+    if hasattr(g, "locations_cache") and cache_key in g.locations_cache:
+        cached_data, cached_time = g.locations_cache[cache_key]
+        if time.time() - cached_time < cache_ttl:
+            logger.debug("Returning cached /api/locations response")
+            return safe_jsonify(cached_data)
+
+    # Initialize cache in g if needed
+    if not hasattr(g, "locations_cache"):
+        g.locations_cache = {}
+
     try:
         # Build filters from request parameters
         filters = {}
@@ -1027,16 +1054,19 @@ def api_locations():
         duration = time.time() - start_time_perf
         logger.info(f"/api/locations completed in {duration:.3f}s")
 
-        return safe_jsonify(
-            {
-                "locations": locations,
-                "traceroute_links": traceroute_links,
-                "packet_links": packet_links,
-                "total_count": len(locations) if isinstance(locations, list) else 0,
-                "filters_applied": filters,
-                "data_period_days": 14,
-            }
-        )
+        response_data = {
+            "locations": locations,
+            "traceroute_links": traceroute_links,
+            "packet_links": packet_links,
+            "total_count": len(locations) if isinstance(locations, list) else 0,
+            "filters_applied": filters,
+            "data_period_days": 14,
+        }
+
+        # Cache the response
+        g.locations_cache[cache_key] = (response_data, time.time())
+
+        return safe_jsonify(response_data)
     except Exception as e:
         logger.error(f"Error in API locations: {e}")
         return jsonify({"error": str(e)}), 500

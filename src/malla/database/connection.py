@@ -7,12 +7,15 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from typing import Any
 
+from psycopg2 import OperationalError, pool
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
 
 from malla.config import get_config
+from malla.exceptions import DatabaseConnectionError, DatabaseError
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +36,12 @@ def get_db_connection() -> Any:
     config = get_config()
 
     if config.database_url and config.database_url.startswith("sqlite"):
-        raise RuntimeError(
+        raise DatabaseConnectionError(
             "SQLite backend is not supported. Configure PostgreSQL via MALLA_DATABASE_URL "
             "or MALLA_DATABASE_HOST/PORT/NAME/USER/PASSWORD."
         )
     if config.database_file and (config.database_file != "meshtastic_history.db"):
-        raise RuntimeError(
+        raise DatabaseConnectionError(
             "SQLite backend is not supported. Remove database_file or set PostgreSQL settings."
         )
 
@@ -54,31 +57,46 @@ def get_db_connection() -> Any:
             "password": config.database_password or "",
         }
 
-    try:
-        # Initialize connection pool if not already done
-        if _connection_pool is None:
-            minconn = int(os.getenv("MALLA_DB_POOL_MIN", "1"))
-            maxconn = int(os.getenv("MALLA_DB_POOL_MAX", "50"))
-            maxconn = max(maxconn, minconn + 1)
+    # Retry logic for database connections
+    max_retries = int(os.getenv("MALLA_DB_CONNECT_RETRIES", "3"))
+    retry_delay = float(os.getenv("MALLA_DB_CONNECT_RETRY_DELAY", "1.0"))
 
-            if isinstance(conn_params, str):
-                _connection_pool = ThreadedConnectionPool(
-                    minconn=minconn, maxconn=maxconn, dsn=conn_params
+    for attempt in range(max_retries):
+        try:
+            # Initialize connection pool if not already done
+            if _connection_pool is None:
+                minconn = int(os.getenv("MALLA_DB_POOL_MIN", "1"))
+                maxconn = int(os.getenv("MALLA_DB_POOL_MAX", "50"))
+                maxconn = max(maxconn, minconn + 1)
+
+                if isinstance(conn_params, str):
+                    _connection_pool = ThreadedConnectionPool(
+                        minconn=minconn, maxconn=maxconn, dsn=conn_params
+                    )
+                else:
+                    _connection_pool = ThreadedConnectionPool(
+                        minconn=minconn, maxconn=maxconn, **conn_params
+                    )
+
+            conn = _connection_pool.getconn()
+            conn.autocommit = False
+
+            _run_schema_migrations_once(conn)
+
+            return conn
+        except (OperationalError, pool.PoolError) as e:
+            if attempt < max_retries - 1:
+                logger.warning(
+                    f"Database connection attempt {attempt + 1}/{max_retries} failed: {e}. Retrying in {retry_delay}s..."
                 )
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
             else:
-                _connection_pool = ThreadedConnectionPool(
-                    minconn=minconn, maxconn=maxconn, **conn_params
-                )
-
-        conn = _connection_pool.getconn()
-        conn.autocommit = False
-
-        _run_schema_migrations_once(conn)
-
-        return conn
-    except Exception as e:
-        logger.error(f"Failed to connect to database: {e}")
-        raise
+                logger.error(f"Failed to connect to database after {max_retries} attempts: {e}")
+                raise DatabaseConnectionError(f"Failed to connect to database: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error connecting to database: {e}")
+            raise DatabaseError(f"Database error: {e}") from e
 
 
 def put_db_connection(conn: Any) -> None:

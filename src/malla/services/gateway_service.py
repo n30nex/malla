@@ -14,21 +14,18 @@ from psycopg2.extras import RealDictCursor
 
 from ..database.connection import get_db_connection, put_db_connection
 from ..database.repositories import PacketRepository
+from ..utils.cache_manager import get_gateway_cache_manager
 from ..utils.node_utils import get_bulk_node_names
 
 logger = logging.getLogger(__name__)
 
 
 class GatewayService:
-    """Service for gateway analysis and statistics with caching."""
-
-    # Simple in-memory cache for gateway statistics
-    _cache: dict[str, tuple[float, Any]] = {}
-    _cache_ttl_seconds = 300  # 5 minutes cache
+    """Service for gateway analysis and statistics with centralized caching."""
 
     @staticmethod
     def get_gateway_statistics(hours: int = 24) -> dict[str, Any]:
-        """Get comprehensive gateway statistics with caching.
+        """Get comprehensive gateway statistics with centralized caching.
 
         Args:
             hours: Number of hours to analyze (default: 24)
@@ -41,147 +38,149 @@ class GatewayService:
             - gateway_diversity_score: Score from 0-100 indicating gateway diversity
         """
         cache_key = f"gateway_stats_{hours}h"
-        now = time.time()
+        cache_manager = get_gateway_cache_manager()
 
-        # Check cache first
-        if cache_key in GatewayService._cache:
-            cached_time, cached_data = GatewayService._cache[cache_key]
-            if now - cached_time < GatewayService._cache_ttl_seconds:
-                logger.debug(f"Returning cached gateway statistics for {hours}h")
-                return cached_data
+        def _compute_statistics() -> dict[str, Any]:
+            """Compute gateway statistics (called on cache miss or refresh)."""
+            logger.info(f"Computing gateway statistics for {hours}h")
+            start_time = time.time()
 
-        logger.info(f"Computing gateway statistics for {hours}h (cache miss)")
-        start_time = time.time()
+            conn = None
+            cursor = None
+            try:
+                # Calculate time window
+                end_time = datetime.now()
+                start_time_dt = end_time - timedelta(hours=hours)
 
-        conn = None
-        cursor = None
-        try:
-            # Calculate time window
-            end_time = datetime.now()
-            start_time_dt = end_time - timedelta(hours=hours)
+                conn = get_db_connection()
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-            conn = get_db_connection()
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-
-            # Get total unique gateways
-            cursor.execute(
-                """
-                SELECT COUNT(DISTINCT gateway_id) as total_gateways
-                FROM packet_history
-                WHERE gateway_id IS NOT NULL
-                AND timestamp >= %s AND timestamp <= %s
-            """,
-                (start_time_dt.timestamp(), end_time.timestamp()),
-            )
-
-            total_gateways = cursor.fetchone()["total_gateways"] or 0
-
-            # Get gateway distribution (top 20)
-            cursor.execute(
-                """
-                SELECT
-                    gateway_id,
-                    COUNT(*) as packet_count,
-                    COUNT(DISTINCT from_node_id) as unique_sources,
-                    AVG(CAST(rssi AS FLOAT)) as avg_rssi,
-                    AVG(CAST(snr AS FLOAT)) as avg_snr,
-                    MAX(timestamp) as last_seen
-                FROM packet_history
-                WHERE gateway_id IS NOT NULL
-                AND timestamp >= %s AND timestamp <= %s
-                GROUP BY gateway_id
-                ORDER BY packet_count DESC
-                LIMIT 20
-            """,
-                (start_time_dt.timestamp(), end_time.timestamp()),
-            )
-
-            gateway_distribution = []
-            for row in cursor.fetchall():
-                gateway_distribution.append(
-                    {
-                        "gateway_id": row["gateway_id"],
-                        "packet_count": row["packet_count"],
-                        "unique_sources": row["unique_sources"],
-                        "avg_rssi": round(row["avg_rssi"], 1)
-                        if row["avg_rssi"]
-                        else None,
-                        "avg_snr": round(row["avg_snr"], 1) if row["avg_snr"] else None,
-                        "last_seen": row["last_seen"],
-                        "last_seen_str": datetime.fromtimestamp(
-                            row["last_seen"]
-                        ).strftime("%Y-%m-%d %H:%M:%S"),
-                    }
+                # Get total unique gateways
+                cursor.execute(
+                    """
+                    SELECT COUNT(DISTINCT gateway_id) as total_gateways
+                    FROM packet_history
+                    WHERE gateway_id IS NOT NULL
+                    AND timestamp >= %s AND timestamp <= %s
+                """,
+                    (start_time_dt.timestamp(), end_time.timestamp()),
                 )
 
-            # Get nodes with gateway counts
-            cursor.execute(
-                """
-                SELECT COUNT(DISTINCT from_node_id) as nodes_with_gateways
-                FROM packet_history
-                WHERE gateway_id IS NOT NULL
-                AND timestamp >= %s AND timestamp <= %s
-            """,
-                (start_time_dt.timestamp(), end_time.timestamp()),
-            )
+                total_gateways = cursor.fetchone()["total_gateways"] or 0
 
-            nodes_with_gateways = cursor.fetchone()["nodes_with_gateways"] or 0
+                # Get gateway distribution (top 20)
+                cursor.execute(
+                    """
+                    SELECT
+                        gateway_id,
+                        COUNT(*) as packet_count,
+                        COUNT(DISTINCT from_node_id) as unique_sources,
+                        AVG(CAST(rssi AS FLOAT)) as avg_rssi,
+                        AVG(CAST(snr AS FLOAT)) as avg_snr,
+                        MAX(timestamp) as last_seen
+                    FROM packet_history
+                    WHERE gateway_id IS NOT NULL
+                    AND timestamp >= %s AND timestamp <= %s
+                    GROUP BY gateway_id
+                    ORDER BY packet_count DESC
+                    LIMIT 20
+                """,
+                    (start_time_dt.timestamp(), end_time.timestamp()),
+                )
 
-            # Calculate gateway diversity score (0-100)
-            # Based on total gateways and distribution
-            if total_gateways == 0:
-                diversity_score = 0
-            elif total_gateways >= 10:
-                diversity_score = 100
-            else:
-                diversity_score = min(100, total_gateways * 10)
+                gateway_distribution = []
+                for row in cursor.fetchall():
+                    gateway_distribution.append(
+                        {
+                            "gateway_id": row["gateway_id"],
+                            "packet_count": row["packet_count"],
+                            "unique_sources": row["unique_sources"],
+                            "avg_rssi": round(row["avg_rssi"], 1)
+                            if row["avg_rssi"]
+                            else None,
+                            "avg_snr": round(row["avg_snr"], 1) if row["avg_snr"] else None,
+                            "last_seen": row["last_seen"],
+                            "last_seen_str": datetime.fromtimestamp(
+                                row["last_seen"]
+                            ).strftime("%Y-%m-%d %H:%M:%S"),
+                        }
+                    )
 
-            result = {
-                "total_gateways": total_gateways,
-                "gateway_distribution": gateway_distribution,
-                "nodes_with_gateway_counts": nodes_with_gateways,
-                "gateway_diversity_score": diversity_score,
-                "analysis_hours": hours,
-                "generated_at": now,
-                "generated_at_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
+                # Get nodes with gateway counts
+                cursor.execute(
+                    """
+                    SELECT COUNT(DISTINCT from_node_id) as nodes_with_gateways
+                    FROM packet_history
+                    WHERE gateway_id IS NOT NULL
+                    AND timestamp >= %s AND timestamp <= %s
+                """,
+                    (start_time_dt.timestamp(), end_time.timestamp()),
+                )
 
-            # Cache the result
-            GatewayService._cache[cache_key] = (now, result)
+                nodes_with_gateways = cursor.fetchone()["nodes_with_gateways"] or 0
 
-            computation_time = time.time() - start_time
-            logger.info(
-                f"Gateway statistics computed in {computation_time:.3f}s (cached for {GatewayService._cache_ttl_seconds}s)"
-            )
+                # Calculate gateway diversity score (0-100)
+                # Based on total gateways and distribution
+                if total_gateways == 0:
+                    diversity_score = 0
+                elif total_gateways >= 10:
+                    diversity_score = 100
+                else:
+                    diversity_score = min(100, total_gateways * 10)
 
-            return result
-        except Exception as e:
-            logger.error(f"Error computing gateway statistics: {e}")
-            # Return empty result on error
-            return {
-                "total_gateways": 0,
-                "gateway_distribution": [],
-                "nodes_with_gateway_counts": 0,
-                "gateway_diversity_score": 0,
-                "analysis_hours": hours,
-                "generated_at": now,
-                "generated_at_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "error": str(e),
-            }
-        finally:
-            if cursor:
-                try:
-                    cursor.close()
-                except Exception:
-                    pass
-            if conn:
-                try:
-                    put_db_connection(conn)
-                except Exception:
+                result = {
+                    "total_gateways": total_gateways,
+                    "gateway_distribution": gateway_distribution,
+                    "nodes_with_gateway_counts": nodes_with_gateways,
+                    "gateway_diversity_score": diversity_score,
+                    "analysis_hours": hours,
+                    "generated_at": time.time(),
+                    "generated_at_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+
+                computation_time = time.time() - start_time
+                logger.info(
+                    f"Gateway statistics computed in {computation_time:.3f}s"
+                )
+
+                return result
+            except Exception as e:
+                logger.error(f"Error computing gateway statistics: {e}")
+                # Return empty result on error
+                return {
+                    "total_gateways": 0,
+                    "gateway_distribution": [],
+                    "nodes_with_gateway_counts": 0,
+                    "gateway_diversity_score": 0,
+                    "analysis_hours": hours,
+                    "generated_at": time.time(),
+                    "generated_at_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "error": str(e),
+                }
+            finally:
+                if cursor:
                     try:
-                        conn.close()
+                        cursor.close()
                     except Exception:
                         pass
+                if conn:
+                    try:
+                        put_db_connection(conn)
+                    except Exception:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+
+        # Use centralized cache with refresh callback
+        result = cache_manager.get_or_set(
+            cache_key,
+            _compute_statistics,
+            ttl_seconds=300.0,  # 5 minutes
+            refresh_callback=_compute_statistics,  # Enable stale-while-revalidate
+        )
+
+        return result
 
     @staticmethod
     def get_node_gateway_counts(node_ids: list[int], hours: int = 24) -> dict[int, int]:
@@ -198,13 +197,13 @@ class GatewayService:
             return {}
 
         cache_key = f"node_gateway_counts_{len(node_ids)}_{hours}h"
-        now = time.time()
+        cache_manager = get_gateway_cache_manager()
 
-        # Check cache (for small lists only)
-        if len(node_ids) <= 10 and cache_key in GatewayService._cache:
-            cached_time, cached_data = GatewayService._cache[cache_key]
-            if now - cached_time < GatewayService._cache_ttl_seconds:
-                return cached_data
+        # Use centralized cache for small lists only
+        if len(node_ids) <= 10:
+            cached_result = cache_manager.get(cache_key)
+            if cached_result is not None:
+                return cached_result
 
         conn = None
         cursor = None
@@ -240,9 +239,9 @@ class GatewayService:
                 if node_id not in result:
                     result[node_id] = 0
 
-            # Cache small results
+            # Cache small results using centralized cache
             if len(node_ids) <= 10:
-                GatewayService._cache[cache_key] = (now, result)
+                cache_manager.set(cache_key, result, ttl_seconds=300.0)
 
             return result
 
@@ -267,7 +266,8 @@ class GatewayService:
     @staticmethod
     def clear_cache():
         """Clear the gateway statistics cache."""
-        GatewayService._cache.clear()
+        cache_manager = get_gateway_cache_manager()
+        cache_manager.clear()
         logger.info("Gateway service cache cleared")
 
     @staticmethod

@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 
 import yaml
 
+from .exceptions import ConfigurationError
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -26,7 +28,7 @@ class AppConfig:
     home_markdown: str = ""
 
     # Flask/server settings
-    secret_key: str = "dev-secret-key-change-in-production"
+    secret_key: str | None = None  # Must be explicitly set in production
     database_file: str = "meshtastic_history.db"  # Deprecated: kept for backward compatibility
     host: str = "0.0.0.0"
     port: int = 5008
@@ -184,8 +186,24 @@ def load_config(config_path: str | os.PathLike | None = None) -> AppConfig:  # n
             data[field_name] = _coerce_value(os.environ[env_key], field_obj.type)
 
     # Construct the config instance
-    config = AppConfig(**data)  # type: ignore[arg-type]
+    # If secret_key is not provided, use default only for development
+    if "secret_key" not in data:
+        data["secret_key"] = None  # Will be validated in validate_config
+
+    try:
+        config = AppConfig(**data)  # type: ignore[arg-type]
+    except TypeError as e:
+        raise ConfigurationError(f"Invalid configuration data: {e}") from e
+
     config._config_path = yaml_path if yaml_path.is_file() else None
+
+    # Validate configuration immediately after loading
+    try:
+        validate_config(config)
+    except ConfigurationError:
+        raise  # Re-raise configuration errors as-is
+    except Exception as e:
+        raise ConfigurationError(f"Configuration validation failed: {e}") from e
 
     logger.debug("Loaded application configuration: %s", config)
     return config
@@ -212,11 +230,31 @@ def _is_postgres_url(url: str | None) -> bool:
 
 
 def validate_config(cfg: AppConfig) -> None:
-    """Validate required configuration and enforce PostgreSQL-only backend."""
+    """Validate required configuration and enforce PostgreSQL-only backend.
+
+    Raises:
+        ConfigurationError: If configuration is invalid or missing required settings.
+    """
 
     errors: list[str] = []
     allow_sqlite_for_tests = os.getenv("MALLA_ALLOW_SQLITE_FOR_TESTS") == "1"
+    is_production = not cfg.debug and os.getenv("MALLA_ENV") != "development"
+    service_type = os.getenv("MALLA_SERVICE_TYPE", "web").lower()
 
+    # Security: Require explicit secret key in production (only for web service)
+    # The capture service doesn't need Flask's secret key
+    if is_production and service_type != "capture":
+        if not cfg.secret_key or cfg.secret_key == "dev-secret-key-change-in-production":
+            errors.append(
+                "MALLA_SECRET_KEY must be explicitly set in production. "
+                "Do not use the default secret key."
+            )
+        elif len(cfg.secret_key) < 32:
+            errors.append(
+                "MALLA_SECRET_KEY must be at least 32 characters long for security."
+            )
+
+    # Database validation
     if not allow_sqlite_for_tests:
         if cfg.database_url and not _is_postgres_url(cfg.database_url):
             errors.append(
@@ -236,11 +274,23 @@ def validate_config(cfg: AppConfig) -> None:
                 "MALLA_DATABASE_HOST/PORT/NAME/USER/PASSWORD."
             )
 
+    # MQTT validation
     if not cfg.mqtt_broker_address:
         errors.append("MQTT broker address is required (MALLA_MQTT_BROKER_ADDRESS).")
 
+    # Port validation
+    if cfg.port < 1 or cfg.port > 65535:
+        errors.append(f"Invalid port number: {cfg.port}. Must be between 1 and 65535.")
+
+    # Log level validation
+    valid_log_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+    if cfg.log_level.upper() not in valid_log_levels:
+        errors.append(
+            f"Invalid log level: {cfg.log_level}. Must be one of {valid_log_levels}."
+        )
+
     if errors:
-        raise ValueError("Config validation failed:\n - " + "\n - ".join(errors))
+        raise ConfigurationError("Config validation failed:\n - " + "\n - ".join(errors))
 
 
 # Convenience singleton to avoid re-loading throughout the process

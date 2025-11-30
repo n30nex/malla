@@ -13,6 +13,8 @@ from typing import Any
 from meshtastic import mesh_pb2
 from psycopg2.extras import RealDictCursor
 
+from ..cache import cache_result
+from ..exceptions import DatabaseError, DatabaseQueryError
 from ..utils.formatting import format_time_ago
 from ..utils.node_utils import get_bulk_node_short_names
 from .connection import get_db_connection, put_db_connection
@@ -38,22 +40,24 @@ class DashboardRepository:
             twenty_four_hours_ago = time.time() - (24 * 3600)
             one_hour_ago = time.time() - 3600
 
-            # Build WHERE clause for gateway filtering
-            gateway_filter = ""
-            gateway_params = []
+            # Build WHERE clause for gateway filtering (parameterized for security)
+            where_conditions = ["timestamp > %s"]
+            params = [twenty_four_hours_ago]
             if gateway_id:
-                gateway_filter = " AND gateway_id = %s"
-                gateway_params = [gateway_id]
+                where_conditions.append("gateway_id = %s")
+                params.append(gateway_id)
+
+            where_clause = "WHERE " + " AND ".join(where_conditions)
 
             # Get basic node count (this is fast and separate)
             cursor.execute("SELECT COUNT(*) as total_nodes FROM node_info")
             total_nodes = cursor.fetchone()["total_nodes"]
 
             # Single optimized query for all packet statistics
-            params = [one_hour_ago, twenty_four_hours_ago] + gateway_params
+            stats_params = [one_hour_ago] + params
 
             cursor.execute(
-                f"""
+                """
                 SELECT
                     COUNT(*) as total_packets,
                     COUNT(DISTINCT CASE WHEN from_node_id IS NOT NULL THEN from_node_id END) as active_nodes_24h,
@@ -65,30 +69,39 @@ class DashboardRepository:
                          THEN ROUND(SUM(CASE WHEN processed_successfully = TRUE THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1)
                          ELSE 0 END as success_rate
                 FROM packet_history
-                WHERE timestamp > %s{gateway_filter}
-            """,
-                params,
+                """ + where_clause,
+                stats_params,
             )
 
             stats_row = cursor.fetchone()
 
             # Get total packet count (all time) separately
+            total_where = "WHERE 1=1"
+            total_params: list[Any] = []
+            if gateway_id:
+                total_where += " AND gateway_id = %s"
+                total_params.append(gateway_id)
+
             cursor.execute(
-                f"SELECT COUNT(*) as total FROM packet_history WHERE 1=1{gateway_filter}",
-                gateway_params,
+                "SELECT COUNT(*) as total FROM packet_history " + total_where,
+                total_params,
             )
             total_packets_all_time = cursor.fetchone()["total"]
 
             # Get packet types separately (more efficient than JSON aggregation in PostgreSQL)
+            packet_types_params = [twenty_four_hours_ago]
+            if gateway_id:
+                packet_types_params.append(gateway_id)
             cursor.execute(
-                f"""
+                """
                 SELECT portnum_name, COUNT(*) as count
                 FROM packet_history
-                WHERE portnum_name IS NOT NULL AND timestamp > %s{gateway_filter}
+                WHERE portnum_name IS NOT NULL AND timestamp > %s
+                """ + (" AND gateway_id = %s" if gateway_id else "") + """
                 GROUP BY portnum_name
                 ORDER BY count DESC
-            """,
-                [twenty_four_hours_ago] + gateway_params,
+                """,
+                packet_types_params,
             )
 
             packet_types = [dict(row) for row in cursor.fetchall()]
@@ -107,9 +120,11 @@ class DashboardRepository:
                 "success_rate": stats_row["success_rate"] or 0,
             }
 
-        except Exception as e:
-            logger.error(f"Error getting dashboard stats: {e}")
+        except DatabaseError:
             raise
+        except Exception as e:
+            logger.error(f"Error getting dashboard stats: {e}", exc_info=True)
+            raise DatabaseQueryError(f"Failed to get dashboard stats: {e}") from e
 
 
 class PacketRepository:
@@ -517,7 +532,7 @@ class PacketRepository:
             else:
                 # Original ungrouped behavior
                 # Get total count first
-                count_query = f"SELECT COUNT(*) FROM packet_history {where_clause}"
+                count_query = "SELECT COUNT(*) FROM packet_history " + where_clause
                 cursor.execute(count_query, params)
                 total_count = cursor.fetchone()[0]
 
@@ -694,6 +709,7 @@ class PacketRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_unique_gateway_count() -> int:
         """Get count of unique gateway IDs (optimized for performance)."""
         try:
@@ -716,6 +732,7 @@ class PacketRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_gateway_comparison_data(
         gateway1_id: str, gateway2_id: str, filters: dict | None = None
     ) -> dict[str, Any]:
@@ -923,6 +940,7 @@ class NodeRepository:
     """Repository for node operations."""
 
     @staticmethod
+    @track_query_time("select", "node_info")
     def get_nodes(
         limit: int = 100,
         offset: int = 0,
@@ -1116,6 +1134,7 @@ class NodeRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_node_details(node_id: int) -> dict[str, Any] | None:
         """Get comprehensive details about a specific node."""
         try:
@@ -1893,6 +1912,7 @@ class NodeRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_relay_node_candidates(
         gateway_node_ids: list[int], relay_last_bytes: list[int], cursor=None
     ) -> dict[int, dict[int, list[dict[str, Any]]]]:
@@ -2046,6 +2066,7 @@ class NodeRepository:
                 put_db_connection(conn)
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_relay_node_analysis(node_id: int, limit: int = 50) -> list[dict[str, Any]]:
         """Get relay node analysis for packets reported by this gateway.
 
@@ -2140,6 +2161,7 @@ class NodeRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "node_info")
     def get_basic_node_info(node_id: int) -> dict[str, Any] | None:
         """Get basic node information for tooltips and pickers (optimized for speed)."""
         try:
@@ -2189,6 +2211,7 @@ class NodeRepository:
             return None
 
     @staticmethod
+    @track_query_time("select", "node_info")
     def get_bulk_node_names(node_ids: list[int]) -> dict[int, str]:
         """Get node names in bulk for efficiency."""
         if not node_ids:
@@ -2231,6 +2254,7 @@ class NodeRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_available_from_nodes() -> list[dict[str, Any]]:
         """Get list of nodes that have sent packets."""
         try:
@@ -2263,6 +2287,7 @@ class NodeRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_direct_receptions(
         gateway_node_id: int, limit: int = 1000
     ) -> list[dict[str, Any]]:
@@ -2394,6 +2419,7 @@ class NodeRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_bidirectional_direct_receptions(
         node_id: int, direction: str = "received", limit: int = 1000
     ) -> list[dict[str, Any]]:
@@ -2675,6 +2701,7 @@ class NodeRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "node_info")
     def get_unique_primary_channels() -> list[str]:
         """Return list of unique primary channel names."""
         try:
@@ -2696,6 +2723,7 @@ class TracerouteRepository:
     """Repository for traceroute operations."""
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_traceroute_packets(
         limit: int = 100,
         offset: int = 0,
@@ -3103,7 +3131,7 @@ class TracerouteRepository:
 
                 # Get total count (before route filtering)
                 cursor.execute(
-                    f"SELECT COUNT(*) as total FROM packet_history {where_clause}",
+                    "SELECT COUNT(*) as total FROM packet_history " + where_clause,
                     params,
                 )
                 total_count_before_filter = cursor.fetchone()["total"]
@@ -3232,6 +3260,7 @@ class TracerouteRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_traceroute_details(packet_id: int) -> dict[str, Any] | None:
         """Get details for a specific traceroute packet."""
         try:
@@ -3265,6 +3294,8 @@ class LocationRepository:
     """Repository for location operations."""
 
     @staticmethod
+    @track_query_time("select", "packet_history")
+    @cache_result(ttl_seconds=30, max_size=100)  # Cache for 30 seconds
     def get_node_locations(
         filters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
@@ -3309,20 +3340,20 @@ class LocationRepository:
                     node_ids_clause = f"AND from_node_id IN ({placeholders})"
                     node_ids_params = node_ids_int
 
-            # Optimized query using window function instead of correlated subquery
-            query = f"""
-                WITH max_timestamps AS (
-                    SELECT
-                        from_node_id,
-                        MAX(timestamp) as max_timestamp
-                    FROM packet_history
-                    WHERE portnum IN (3, 73)  -- POSITION_APP and MAP_REPORT_APP
-                    AND raw_payload IS NOT NULL
-                    AND from_node_id IS NOT NULL
-                    {node_ids_clause}
-                    GROUP BY from_node_id
-                )
-                SELECT
+            # Optimized query using DISTINCT ON (more efficient than CTE + JOIN)
+            # Add time filtering to limit scan scope
+            time_filter = ""
+            time_params: list[Any] = []
+            if filters.get("start_time"):
+                time_filter = "AND timestamp >= %s"
+                time_params.append(filters["start_time"])
+            if filters.get("end_time"):
+                time_filter += " AND timestamp <= %s"
+                time_params.append(filters["end_time"])
+
+            # Use DISTINCT ON for better performance - PostgreSQL optimizes this well
+            query = """
+                SELECT DISTINCT ON (ph.from_node_id)
                     ph.from_node_id as node_id,
                     ph.timestamp,
                     ph.raw_payload,
@@ -3333,26 +3364,35 @@ class LocationRepository:
                     ni.primary_channel,
                     ('!' || lpad(to_hex(ph.from_node_id), 8, '0')) as hex_id
                 FROM packet_history ph
-                INNER JOIN max_timestamps mt ON ph.from_node_id = mt.from_node_id
-                    AND ph.timestamp = mt.max_timestamp
                 LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
                 WHERE ph.portnum IN (3, 73)
                 AND ph.raw_payload IS NOT NULL
-                ORDER BY ph.timestamp DESC
+                AND ph.from_node_id IS NOT NULL
+                """ + (node_ids_clause if node_ids_clause else "") + time_filter + """
+                ORDER BY ph.from_node_id, ph.timestamp DESC
             """
 
             # Ensure we have optimal indexes for this query
+            # This index supports the DISTINCT ON query pattern efficiently
             try:
                 cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_packet_history_position_lookup
-                    ON packet_history(portnum, from_node_id, timestamp DESC)
+                    ON packet_history(from_node_id, timestamp DESC)
+                    WHERE portnum IN (3, 73) AND raw_payload IS NOT NULL AND from_node_id IS NOT NULL
+                """)
+                # Also ensure portnum index exists for the WHERE clause
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_packet_history_portnum_position
+                    ON packet_history(portnum, timestamp DESC)
                     WHERE portnum IN (3, 73) AND raw_payload IS NOT NULL
                 """)
             except Exception as e:
                 logger.debug(f"Index creation skipped or failed: {e}")
 
             query_start = time.time()
-            cursor.execute(query, node_ids_params)
+            # Combine all parameters: node_ids first, then time filters
+            all_params = node_ids_params + time_params
+            cursor.execute(query, all_params)
             raw_rows = cursor.fetchall()
             timing_breakdown["sql_query"] = time.time() - query_start
 
@@ -3517,6 +3557,7 @@ class LocationRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_node_location_history(
         node_id: int, limit: int = 100
     ) -> list[dict[str, Any]]:
@@ -3596,6 +3637,7 @@ class LocationRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_latest_node_location(node_id: int) -> dict[str, Any] | None:
         """Return the most recent decoded location packet for a single node.
 
@@ -3673,6 +3715,7 @@ class LocationRepository:
             raise
 
     @staticmethod
+    @track_query_time("select", "packet_history")
     def get_node_location_at_timestamp(
         node_id: int, target_timestamp: float
     ) -> dict[str, Any] | None:

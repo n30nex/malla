@@ -9,3 +9,55 @@ services:
     environment:
       # Ensure debug is disabled in production
       - MALLA_DEBUG=false
+      # Production-specific settings
+      - MALLA_ENV=production
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    # Production logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  malla-capture:
+    # Production-specific settings
+    environment:
+      - MALLA_ENV=production
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres:
+    # Production PostgreSQL settings
+    environment:
+      - POSTGRES_INITDB_ARGS=--encoding=UTF8 --locale=C
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
