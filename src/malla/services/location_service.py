@@ -7,12 +7,16 @@ import math
 import time
 from datetime import UTC, datetime
 from typing import Any
+from functools import lru_cache
 
 from psycopg2.extras import RealDictCursor
 
 from ..database.repositories import LocationRepository
 
 logger = logging.getLogger(__name__)
+
+# In-memory cache for reverse geocoding (city names)
+_geocoding_cache: dict[tuple[float, float], tuple[str | None, float]] = {}
 
 
 class LocationService:
@@ -122,6 +126,8 @@ class LocationService:
         # Create neighbor count maps
         neighbor_counts = {}
         neighbor_details: dict[int, list[dict[str, Any]]] = {}
+        # Track RSSI/SNR per node for heatmap
+        node_rssi_data: dict[int, dict[str, Any]] = {}  # node_id -> {rssi_sum, rssi_count, snr_sum, snr_count}
 
         # Process network links to build neighbor relationships
         for link in network_data.get("links", []):
@@ -159,6 +165,17 @@ class LocationService:
                     "packet_count": 0,  # Will be updated if direct packets exist
                 }
             )
+
+            # Accumulate SNR for node-level averages (for heatmap)
+            if avg_snr is not None:
+                if source_id not in node_rssi_data:
+                    node_rssi_data[source_id] = {"rssi_sum": 0, "rssi_count": 0, "snr_sum": 0, "snr_count": 0}
+                if target_id not in node_rssi_data:
+                    node_rssi_data[target_id] = {"rssi_sum": 0, "rssi_count": 0, "snr_sum": 0, "snr_count": 0}
+                node_rssi_data[source_id]["snr_sum"] += avg_snr * traceroute_count
+                node_rssi_data[source_id]["snr_count"] += traceroute_count
+                node_rssi_data[target_id]["snr_sum"] += avg_snr * traceroute_count
+                node_rssi_data[target_id]["snr_count"] += traceroute_count
 
         # Get direct packet links to include in neighbor data
         try:
@@ -241,6 +258,24 @@ class LocationService:
                         }
                     )
 
+                # Accumulate RSSI/SNR from packet links for node-level averages (for heatmap)
+                avg_rssi = link.get("avg_rssi")
+                avg_snr = link.get("avg_snr")
+                if from_node_id not in node_rssi_data:
+                    node_rssi_data[from_node_id] = {"rssi_sum": 0, "rssi_count": 0, "snr_sum": 0, "snr_count": 0}
+                if to_node_id not in node_rssi_data:
+                    node_rssi_data[to_node_id] = {"rssi_sum": 0, "rssi_count": 0, "snr_sum": 0, "snr_count": 0}
+                if avg_rssi is not None:
+                    node_rssi_data[from_node_id]["rssi_sum"] += avg_rssi * packet_count
+                    node_rssi_data[from_node_id]["rssi_count"] += packet_count
+                    node_rssi_data[to_node_id]["rssi_sum"] += avg_rssi * packet_count
+                    node_rssi_data[to_node_id]["rssi_count"] += packet_count
+                if avg_snr is not None:
+                    node_rssi_data[from_node_id]["snr_sum"] += avg_snr * packet_count
+                    node_rssi_data[from_node_id]["snr_count"] += packet_count
+                    node_rssi_data[to_node_id]["snr_sum"] += avg_snr * packet_count
+                    node_rssi_data[to_node_id]["snr_count"] += packet_count
+
         except Exception as e:
             logger.warning(f"Failed to get packet links for neighbor data: {e}")
 
@@ -266,6 +301,16 @@ class LocationService:
             direct_neighbors = neighbor_counts.get(node_id, 0)
             neighbors = neighbor_details.get(node_id, [])
 
+            # Compute node-level RSSI/SNR averages from accumulated data (for heatmap)
+            rssi_data = node_rssi_data.get(node_id, {})
+            avg_rssi = None
+            if rssi_data.get("rssi_count", 0) > 0:
+                avg_rssi = rssi_data["rssi_sum"] / rssi_data["rssi_count"]
+            # Use network_node avg_snr if available, otherwise compute from rssi_data
+            avg_snr = network_node.get("avg_snr")
+            if avg_snr is None and rssi_data.get("snr_count", 0) > 0:
+                avg_snr = rssi_data["snr_sum"] / rssi_data["snr_count"]
+
             enhanced_location = {
                 # Original location data
                 "node_id": location["node_id"],
@@ -290,7 +335,8 @@ class LocationService:
                 "precision_meters": location.get("precision_meters"),
                 # Network analysis data
                 "packet_count": network_node.get("packet_count", 0),
-                "avg_snr": network_node.get("avg_snr"),
+                "avg_snr": avg_snr,
+                "avg_rssi": avg_rssi,  # Added for heatmap
                 "last_seen_network": network_node.get("last_seen"),
             }
 
@@ -695,6 +741,71 @@ class LocationService:
         except Exception as e:
             logger.error(f"Error finding neighbors for node {node_id}: {e}")
             raise
+
+    @staticmethod
+    def reverse_geocode_city(latitude: float, longitude: float) -> str | None:
+        """
+        Reverse geocode coordinates to get the nearest city name using OSM Nominatim.
+        Results are cached to avoid excessive API calls.
+
+        Args:
+            latitude: Latitude coordinate
+            longitude: Longitude coordinate
+
+        Returns:
+            City name string or None if geocoding fails
+        """
+        # Round coordinates to ~100m precision for cache efficiency
+        cache_key = (round(latitude, 3), round(longitude, 3))
+
+        # Check cache (with 24 hour TTL)
+        if cache_key in _geocoding_cache:
+            city, cached_time = _geocoding_cache[cache_key]
+            if time.time() - cached_time < 86400:  # 24 hours
+                return city
+
+        try:
+            import urllib.request
+            import urllib.parse
+            import json
+
+            # Use Nominatim reverse geocoding API
+            url = f"https://nominatim.openstreetmap.org/reverse?lat={latitude}&lon={longitude}&format=json&addressdetails=1"
+            headers = {
+                "User-Agent": "Malla Mesh Network Monitor/1.0"  # Required by Nominatim ToS
+            }
+
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode())
+
+            # Extract city name from address components
+            address = data.get("address", {})
+            city = (
+                address.get("city")
+                or address.get("town")
+                or address.get("village")
+                or address.get("municipality")
+                or address.get("county")
+                or address.get("state")
+            )
+
+            # Cache result
+            _geocoding_cache[cache_key] = (city, time.time())
+
+            # Limit cache size to prevent memory issues
+            if len(_geocoding_cache) > 10000:
+                # Remove oldest 20% of entries
+                sorted_items = sorted(_geocoding_cache.items(), key=lambda x: x[1][1])
+                for key in sorted_items[:2000]:
+                    _geocoding_cache.pop(key[0], None)
+
+            return city
+        except Exception as e:
+            logger.debug(f"Reverse geocoding failed for ({latitude}, {longitude}): {e}")
+            # Cache None result for a shorter time (1 hour) to avoid repeated failures
+            _geocoding_cache[cache_key] = (None, time.time() - 82800)  # 23 hours ago
+            return None
 
     @staticmethod
     def calculate_haversine_distance(

@@ -6,6 +6,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
+from psycopg2.extras import RealDictCursor
+
 # Import from the new modular architecture
 from ..database import NodeRepository
 from ..services.location_service import LocationService
@@ -133,7 +135,7 @@ class NodeService:
         node_id_int = convert_node_id(node_id)
 
         conn = get_db_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         # Get recent traceroute packets (same 7-day window as link analysis)
         end_time = datetime.now()
@@ -164,16 +166,14 @@ class NodeService:
         related_nodes = {}
 
         for packet in packets:
-            (
-                packet_id,
-                timestamp,
-                from_node_id,
-                to_node_id,
-                gateway_id,
-                hop_start,
-                hop_limit,
-                raw_payload,
-            ) = packet
+            packet_id = packet["id"]
+            timestamp = packet["timestamp"]
+            from_node_id = packet["from_node_id"]
+            to_node_id = packet["to_node_id"]
+            gateway_id = packet["gateway_id"]
+            hop_start = packet["hop_start"]
+            hop_limit = packet["hop_limit"]
+            raw_payload = packet["raw_payload"]
 
             try:
                 # Create TraceroutePacket to analyze RF hops
@@ -214,27 +214,19 @@ class NodeService:
 
         # Get node info for all related nodes
         if related_nodes:
-            node_ids_str = ",".join(str(nid) for nid in related_nodes.keys())
+            node_ids = list(related_nodes.keys())
+            placeholders = ",".join(["%s"] * len(node_ids))
             node_info_query = f"""
                 SELECT
                     node_id,
                     long_name,
                     short_name,
-                    printf('!%08x', node_id) as hex_id
+                    ('!' || lpad(to_hex(node_id), 8, '0')) as hex_id
                 FROM node_info
-                WHERE node_id IN ({node_ids_str})
+                WHERE node_id IN ({placeholders})
             """
-            cursor.execute(node_info_query)
-            node_info_data = {
-                row[0]: dict(
-                    zip(
-                        ["node_id", "long_name", "short_name", "hex_id"],
-                        row,
-                        strict=False,
-                    )
-                )
-                for row in cursor.fetchall()
-            }
+            cursor.execute(node_info_query, node_ids)
+            node_info_data = {row["node_id"]: row for row in cursor.fetchall()}
         else:
             node_info_data = {}
 

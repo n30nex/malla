@@ -65,6 +65,19 @@ MALLA_DB_CONNECT_RETRY_DELAY=1.0
 MALLA_ENV=development
 ```
 
+### Longest Links Cache and Telemetry Optimization
+
+```bash
+# Longest links cache TTL (seconds). Default: 600 (10 minutes)
+# Controls how long `/api/longest-links` results are reused before a full
+# recalculation is triggered for a given parameter set.
+MALLA_LONGEST_LINKS_CACHE_TTL_SECONDS=600
+```
+
+Notes:
+- Shorter TTLs trade freshness for CPU/DB overhead on heavy longest-links calculations.
+- Longer TTLs reduce load but may show slightly stale longest-links results on very dynamic meshes.
+
 ## Quick Check
 
 To see if your current setup will work:

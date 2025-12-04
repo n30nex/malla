@@ -1,0 +1,2042 @@
+{% extends "base.html" %}
+
+{% block title %}Network Statistics - {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center flex-wrap">
+            <h1 class="h3 mb-0 text-gray-800">
+                <i class="bi bi-bar-chart-fill me-2 text-primary"></i>Network Statistics
+            </h1>
+            <div class="d-flex align-items-center gap-2">
+                <label for="timeRange" class="text-muted small mb-0">Time Range:</label>
+                <select class="form-select form-select-sm" id="timeRange" style="width: auto;">
+                    <option value="1">Last 1 Hour</option>
+                    <option value="6">Last 6 Hours</option>
+                    <option value="24" selected>Last 24 Hours</option>
+                    <option value="168">Last 7 Days</option>
+                </select>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Network Health Metrics -->
+<div class="row mb-4">
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-body text-center">
+                <div class="metric-value text-primary" id="uniqueNodes">-</div>
+                <div class="metric-label">Unique Nodes</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-body text-center">
+                <div class="metric-value text-success" id="totalPackets">-</div>
+                <div class="metric-label">Total Packets</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-body text-center">
+                <div class="metric-value text-info" id="avgRSSI">-</div>
+                <div class="metric-label">Avg RSSI (dBm)</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-body text-center">
+                <div class="metric-value text-warning" id="avgSNR">-</div>
+                <div class="metric-label">Avg SNR (dB)</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Deep-Dive Counters -->
+<div class="row mb-4">
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-body text-center">
+                <div class="metric-value text-primary" id="totalNodesMesh">-</div>
+                <div class="metric-label">Total Nodes in Mesh</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-body text-center">
+                <div class="metric-value text-success" id="dataSentMiB">-</div>
+                <div class="metric-label">Data Sent (MiB)</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-body text-center">
+                <div class="metric-value text-info" id="customNamedNodes">-</div>
+                <div class="metric-label">Custom Named Nodes</div>
+                <small class="text-muted" id="customNamedPct">-</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Row 1 -->
+<div class="row mb-4">
+    <!-- Channel Utilization -->
+    <div class="col-lg-6 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 card-title"><i class="bi bi-activity me-2"></i>Channel Utilization</h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 300px;">
+                    <canvas id="utilizationChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Packet Type Distribution -->
+    <div class="col-lg-6 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 card-title"><i class="bi bi-pie-chart me-2"></i>Packet Type Distribution</h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 300px;">
+                    <canvas id="packetTypesChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Row 2 -->
+<div class="row mb-4">
+    <!-- Top Channels -->
+    <div class="col-lg-6 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 card-title"><i class="bi bi-broadcast me-2"></i>Top Channels</h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 300px;">
+                    <canvas id="channelsChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Gateway Activity -->
+    <div class="col-lg-6 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 card-title"><i class="bi bi-diagram-3 me-2"></i>Gateway Activity</h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 300px;">
+                    <canvas id="gatewayChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Row 3 - Telemetry -->
+<div class="row mb-4">
+    <!-- Top Battery Levels -->
+    <div class="col-lg-4 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 card-title"><i class="bi bi-battery-full me-2"></i>Top Battery Levels</h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 280px;">
+                    <canvas id="batteryChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Top Humidity -->
+    <div class="col-lg-4 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 card-title"><i class="bi bi-droplet me-2"></i>Top Humidity</h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 280px;">
+                    <canvas id="humidityChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Top Voltage -->
+    <div class="col-lg-4 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 card-title"><i class="bi bi-lightning-charge me-2"></i>Top Voltage</h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 280px;">
+                    <canvas id="voltageChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Row 4 -->
+<div class="row mb-4">
+    <div class="col-lg-6 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="mb-0 card-title"><i class="bi bi-shield-check me-2"></i>Delivery Quality</h5>
+                    <small class="text-muted">Success rate and packet volume</small>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 280px;">
+                    <canvas id="deliveryChart"></canvas>
+                </div>
+                <div id="networkOverview" class="text-muted small mt-3">
+                    <div class="spinner-border spinner-border-sm" role="status"></div> Loading...
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 card-title"><i class="bi bi-reception-4 me-2"></i>Signal Quality</h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 280px;">
+                    <canvas id="signalQualityChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MQTT Gateway Status & Signal Quality by Node -->
+<div class="row mb-4">
+    <div class="col-lg-6 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="mb-0 card-title"><i class="bi bi-router-fill me-2"></i>MQTT Gateway Status</h5>
+                    <small class="text-muted">Online/offline gateways in the selected time range</small>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="gatewayStatusTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Gateway</th>
+                                <th class="text-center">Status</th>
+                                <th class="text-end">Last Seen</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td colspan="3" class="text-center py-4">
+                                    <div class="spinner-border text-primary" role="status"></div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="mb-0 card-title"><i class="bi bi-speedometer2 me-2"></i>Signal Quality by Node</h5>
+                    <small class="text-muted">Per-node RSSI/SNR with gauge-style indicators</small>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="signalNodesTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Node</th>
+                                <th class="text-center">Packets</th>
+                                <th class="text-end">Signal</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td colspan="3" class="text-center py-4">
+                                    <div class="spinner-border text-primary" role="status"></div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Node Rankings -->
+<div class="row">
+    <!-- Hottest Nodes -->
+    <div class="col-md-6 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0">
+                <h5 class="mb-0 card-title text-danger"><i class="bi bi-fire me-2"></i>Hottest Nodes</h5>
+                <small class="text-muted">Nodes with highest temperature telemetry</small>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="hottestNodesTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Node</th>
+                                <th class="text-center">Temperature</th>
+                                <th class="text-end">Last Seen</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Populated by JS -->
+                            <tr>
+                                <td colspan="3" class="text-center py-4">
+                                    <div class="spinner-border text-primary" role="status"></div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Coldest Nodes -->
+    <div class="col-md-6 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0">
+                <h5 class="mb-0 card-title text-info"><i class="bi bi-snow2 me-2"></i>Coldest Nodes</h5>
+                <small class="text-muted">Nodes with lowest temperature telemetry</small>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="coldestNodesTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Node</th>
+                                <th class="text-center">Temperature</th>
+                                <th class="text-end">Last Seen</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Populated by JS -->
+                            <tr>
+                                <td colspan="3" class="text-center py-4">
+                                    <div class="spinner-border text-primary" role="status"></div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Advanced Tables -->
+<div class="row mb-4">
+    <!-- Highlighted Nodes -->
+    <div class="col-lg-8 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="mb-0 card-title"><i class="bi bi-stars me-2"></i>Highlighted Nodes</h5>
+                    <small class="text-muted">Most active nodes with optional signal quality filter</small>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <label for="highlightMode" class="small text-muted mb-0">Highlight</label>
+                    <select id="highlightMode" class="form-select form-select-sm" style="width: auto;">
+                        <option value="most_active" selected>Most Active</option>
+                        <option value="weak_signal">Weakest Signal</option>
+                    </select>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="highlightedNodesTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Node</th>
+                                <th class="text-center">Packets</th>
+                                <th class="text-end">Signal</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td colspan="3" class="text-center py-4">
+                                    <div class="spinner-border text-primary" role="status"></div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Top Channel Utilizers -->
+    <div class="col-lg-4 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="mb-0 card-title"><i class="bi bi-list-ol me-2"></i>Top Channel Utilizers</h5>
+                    <small class="text-muted">Nodes sending the most packets across channels</small>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="topChannelUtilizersTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Node</th>
+                                <th class="text-center">Channels Used</th>
+                                <th class="text-end">Packets</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td colspan="3" class="text-center py-4">
+                                    <div class="spinner-border text-primary" role="status"></div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Unique Statistics Section - Not on Dashboard -->
+<div class="row mb-4">
+    <div class="col-12">
+        <h4 class="mb-3"><i class="bi bi-graph-up me-2"></i>Advanced Network Analytics</h4>
+    </div>
+</div>
+
+<!-- Routing & Hardware Analysis Row -->
+<div class="row mb-4">
+    <!-- Hop Count Distribution -->
+    <div class="col-lg-6 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="mb-0 card-title"><i class="bi bi-diagram-3 me-2"></i>Message Routing Efficiency</h5>
+                    <small class="text-muted">Distribution of hop counts (direct vs routed messages)</small>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 300px;">
+                    <canvas id="hopDistributionChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hardware Model Distribution -->
+    <div class="col-lg-6 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="mb-0 card-title"><i class="bi bi-cpu me-2"></i>Hardware Model Distribution</h5>
+                    <small class="text-muted">Device types and their activity in the network</small>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 300px;">
+                    <canvas id="hardwareModelsChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Peak Activity Hours -->
+<div class="row mb-4">
+    <div class="col-12 mb-4">
+        <div class="card shadow-sm h-100 glass-panel">
+            <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="mb-0 card-title"><i class="bi bi-clock-history me-2"></i>Peak Activity Hours</h5>
+                    <small class="text-muted">24-hour activity pattern showing when the network is most active</small>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 300px;">
+                    <canvas id="peakHoursChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<!-- Moment.js for date formatting (loaded without SRI to avoid integrity mismatch blocking) -->
+<script src="https://cdn.jsdelivr.net/npm/moment@2.30.1/moment.min.js"></script>
+<script>
+(() => {
+    let currentHours = 24;
+    const chartInstances = {};
+    const palette = {
+        primary: '#0d6efd',
+        success: '#198754',
+        warning: '#ffc107',
+        info: '#0dcaf0',
+        danger: '#dc3545',
+        purple: '#6f42c1',
+        gray: '#adb5bd'
+    };
+
+    document.addEventListener('DOMContentLoaded', function () {
+        // Check if Chart.js is available
+        if (typeof Chart === 'undefined') {
+            console.error('Chart.js is not loaded. Please check that Chart.js is included in base.html');
+            showError('networkOverview', 'Chart.js library is not loaded. Please refresh the page.');
+            return;
+        }
+
+        const timeRange = document.getElementById('timeRange');
+        if (timeRange) {
+            timeRange.addEventListener('change', function() {
+                currentHours = parseInt(this.value, 10);
+                loadStats();
+            });
+        }
+        loadStats();
+    });
+
+    async function loadStats() {
+        const hoursParam = `?hours=${currentHours}`;
+        try {
+            console.log('Loading stats data...');
+            const responses = await Promise.all([
+                fetch(`/api/stats/hottest${hoursParam}`),
+                fetch(`/api/stats/coldest${hoursParam}`),
+                fetch(`/api/stats/utilization${hoursParam}`),
+                fetch(`/api/stats/packet-types${hoursParam}`),
+                fetch(`/api/stats/channels${hoursParam}`),
+                fetch(`/api/stats/network-health${hoursParam}`),
+                fetch(`/api/stats/node-naming`),
+                fetch(`/api/stats/highlighted-nodes${hoursParam}`),
+                fetch(`/api/stats/gateways${hoursParam}`),
+                fetch(`/api/stats/signal-quality${hoursParam}`),
+                fetch(`/api/stats/signal-quality/nodes${hoursParam}`),
+                fetch(`/api/stats/temporal${hoursParam}`),
+                fetch(`/api/stats/telemetry/battery${hoursParam}`),
+                fetch(`/api/stats/telemetry/humidity${hoursParam}`),
+                fetch(`/api/stats/telemetry/voltage${hoursParam}`),
+                fetch(`/api/stats/top-channel-utilizers${hoursParam}`),
+                fetch(`/gateway/api/gateways/status${hoursParam}`),
+                fetch(`/api/stats/hop-distribution${hoursParam}`),
+                fetch(`/api/stats/hardware-models${hoursParam}`),
+                fetch(`/api/stats/peak-hours${hoursParam}`)
+            ]);
+
+            const names = ['hottest', 'coldest', 'utilization', 'packet types', 'channels', 'network health', 'node naming', 'highlighted nodes', 'gateways', 'signal quality', 'signal quality nodes', 'delivery', 'battery', 'humidity', 'voltage', 'top channel utilizers', 'gateway status', 'hop distribution', 'hardware models', 'peak hours'];
+            responses.forEach((res, idx) => {
+                if (!res.ok) {
+                    console.error(`Failed to load ${names[idx]}: ${res.status} ${res.statusText}`);
+                    throw new Error(`Failed to load ${names[idx]}: ${res.status} ${res.statusText}`);
+                }
+            });
+
+            const [
+                hottestData,
+                coldestData,
+                utilData,
+                packetTypesData,
+                channelsData,
+                healthData,
+                nodeNamingData,
+                highlightedNodesData,
+                gatewayData,
+                signalData,
+                signalNodesData,
+                temporalData,
+                batteryData,
+                humidityData,
+                voltageData,
+                topChannelUtilizersData,
+                gatewayStatusData,
+                hopDistributionData,
+                hardwareModelsData,
+                peakHoursData
+            ] = await Promise.all(responses.map(async (r) => {
+                try {
+                    return await r.json();
+                } catch (e) {
+                    console.error('Failed to parse JSON response:', e);
+                    return { error: 'Failed to parse response data' };
+                }
+            }));
+
+            console.log('Stats data loaded successfully');
+
+            // Handle each data set with error checking
+            if (hottestData && hottestData.error) {
+                showError('hottestNodesTable', hottestData.error);
+            } else {
+                renderNodeTable('hottestNodesTable', Array.isArray(hottestData) ? hottestData : (hottestData?.nodes || hottestData || []));
+            }
+
+            if (coldestData && coldestData.error) {
+                showError('coldestNodesTable', coldestData.error);
+            } else {
+                renderNodeTable('coldestNodesTable', Array.isArray(coldestData) ? coldestData : (coldestData?.nodes || coldestData || []));
+            }
+
+            if (utilData && utilData.error) {
+                showError('utilizationChart', utilData.error);
+            } else {
+                renderUtilizationChart(utilData || {});
+            }
+
+            if (packetTypesData && packetTypesData.error) {
+                showError('packetTypesChart', packetTypesData.error);
+            } else {
+                renderPacketTypesChart(packetTypesData || {});
+            }
+
+            if (channelsData && channelsData.error) {
+                showError('channelsChart', channelsData.error);
+            } else {
+                renderChannelsChart(channelsData || {});
+            }
+
+            if (healthData && healthData.error) {
+                showError('networkOverview', healthData.error);
+            } else {
+                renderNetworkHealth(healthData || {});
+            }
+
+            if (nodeNamingData && nodeNamingData.error) {
+                console.error('Failed to load node naming stats:', nodeNamingData.error);
+            } else {
+                renderNodeNamingStats(nodeNamingData || {});
+            }
+
+            if (Array.isArray(highlightedNodesData)) {
+                renderHighlightedNodesTable('highlightedNodesTable', highlightedNodesData);
+            } else if (highlightedNodesData && highlightedNodesData.error) {
+                showError('highlightedNodesTable', highlightedNodesData.error);
+            } else {
+                renderHighlightedNodesTable('highlightedNodesTable', []);
+            }
+
+            if (gatewayData && gatewayData.error) {
+                showError('gatewayChart', gatewayData.error);
+            } else {
+                renderGatewayChart(gatewayData || {});
+            }
+
+            if (signalData && signalData.error) {
+                showError('signalQualityChart', signalData.error);
+            } else {
+                renderSignalQualityChart(signalData || {});
+            }
+
+            if (Array.isArray(signalNodesData)) {
+                renderSignalNodesTable('signalNodesTable', signalNodesData);
+            } else if (signalNodesData && signalNodesData.error) {
+                showError('signalNodesTable', signalNodesData.error);
+            } else {
+                renderSignalNodesTable('signalNodesTable', []);
+            }
+
+            if (temporalData && temporalData.error) {
+                showError('deliveryChart', temporalData.error);
+            } else {
+                renderDeliveryChart(temporalData || {});
+            }
+
+            if (Array.isArray(topChannelUtilizersData)) {
+                renderTopChannelUtilizersTable('topChannelUtilizersTable', topChannelUtilizersData);
+            } else if (topChannelUtilizersData && topChannelUtilizersData.error) {
+                showError('topChannelUtilizersTable', topChannelUtilizersData.error);
+            } else {
+                renderTopChannelUtilizersTable('topChannelUtilizersTable', []);
+            }
+
+            if (gatewayStatusData && gatewayStatusData.error) {
+                showError('gatewayStatusTable', gatewayStatusData.error);
+            } else {
+                renderGatewayStatusTable('gatewayStatusTable', gatewayStatusData || {});
+            }
+
+            // Handle telemetry data (arrays, not objects)
+            if (Array.isArray(batteryData)) {
+                renderTelemetryChart('batteryChart', batteryData, 'Battery Level', '%', '#28a745');
+            } else if (batteryData && batteryData.error) {
+                showError('batteryChart', batteryData.error);
+            } else {
+                renderTelemetryChart('batteryChart', [], 'Battery Level', '%', '#28a745');
+            }
+
+            if (Array.isArray(humidityData)) {
+                renderTelemetryChart('humidityChart', humidityData, 'Humidity', '%', '#0dcaf0');
+            } else if (humidityData && humidityData.error) {
+                showError('humidityChart', humidityData.error);
+            } else {
+                renderTelemetryChart('humidityChart', [], 'Humidity', '%', '#0dcaf0');
+            }
+
+            if (Array.isArray(voltageData)) {
+                renderTelemetryChart('voltageChart', voltageData, 'Voltage', 'V', '#ffc107');
+            } else if (voltageData && voltageData.error) {
+                showError('voltageChart', voltageData.error);
+            } else {
+                renderTelemetryChart('voltageChart', [], 'Voltage', 'V', '#ffc107');
+            }
+        } catch (error) {
+            console.error('Error loading stats:', error);
+            [
+                'hottestNodesTable',
+                'coldestNodesTable',
+                'utilizationChart',
+                'packetTypesChart',
+                'channelsChart',
+                'gatewayChart',
+                'signalQualityChart',
+                'deliveryChart',
+                'networkOverview',
+                'batteryChart',
+                'humidityChart',
+                'voltageChart',
+                'topChannelUtilizersTable',
+                'gatewayStatusTable'
+            ].forEach(id => showError(id, 'Failed to load data. Please refresh the page.'));
+        }
+    }
+
+    function renderTelemetryChart(canvasId, data, label, unit, color) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) {
+            console.error(`${canvasId} canvas not found`);
+            return;
+        }
+
+        if (typeof Chart === 'undefined') {
+            console.error('Chart.js is not available');
+            showError(canvasId, 'Chart.js library is not loaded');
+            return;
+        }
+
+        resetChartContainer(canvas);
+        if (chartInstances[canvasId]) {
+            chartInstances[canvasId].destroy();
+        }
+
+        if (!data || data.length === 0) {
+            replaceChartWithMessage(canvas, `No ${label.toLowerCase()} data available`);
+            return;
+        }
+
+        const labels = data.map(node => {
+            const name = node.display_name || node.name || `Node ${node.node_id || 'Unknown'}`;
+            return name.length > 15 ? name.substring(0, 15) + '...' : name;
+        });
+        const values = data.map(node => node.metric_value || 0);
+
+        const ctx = canvas.getContext('2d');
+        chartInstances[canvasId] = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: `${label} (${unit})`,
+                    data: values,
+                    backgroundColor: `${color}cc`,
+                    borderColor: color,
+                    borderWidth: 1.5
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (context) => {
+                                const value = context.parsed.x || 0;
+                                return `${label}: ${value}${unit}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        title: { display: true, text: `${label} (${unit})` }
+                    },
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+
+    function renderPacketTypesChart(data) {
+        const canvas = document.getElementById('packetTypesChart');
+        if (!canvas) {
+            console.error('packetTypesChart canvas not found');
+            return;
+        }
+
+        if (typeof Chart === 'undefined') {
+            console.error('Chart.js is not available');
+            showError('packetTypesChart', 'Chart.js library is not loaded');
+            return;
+        }
+
+        resetChartContainer(canvas);
+        if (chartInstances.packetTypesChart) {
+            chartInstances.packetTypesChart.destroy();
+        }
+
+        const packetTypes = Array.isArray(data) ? data : (data.packet_types || []);
+        if (!packetTypes.length) {
+            replaceChartWithMessage(canvas, 'No packet type data available');
+            return;
+        }
+
+        const labels = packetTypes.map(pt => pt.portnum_name || 'Unknown');
+        const counts = packetTypes.map(pt => pt.count || 0);
+        const colors = [
+            palette.primary,
+            palette.success,
+            palette.info,
+            palette.warning,
+            palette.danger,
+            palette.gray,
+            '#20c997',
+            palette.purple,
+            '#fd7e14',
+            '#0dcaf0'
+        ];
+
+        const ctx = canvas.getContext('2d');
+        chartInstances.packetTypesChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels,
+                datasets: [{
+                    data: counts,
+                    backgroundColor: colors.slice(0, labels.length),
+                    borderWidth: 2,
+                    borderColor: '#fff'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'right' },
+                    tooltip: {
+                        callbacks: {
+                            label: (context) => {
+                                const label = context.label || '';
+                                const value = context.parsed || 0;
+                                const total = counts.reduce((a, b) => a + b, 0);
+                                const pct = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                                return `${label}: ${value} (${pct}%)`;
+                            }
+                        }
+                    }
+                },
+                onClick: async (event, elements) => {
+                    if (!elements || !elements.length) return;
+                    const idx = elements[0].index;
+                    const portnumName = labels[idx];
+                    if (!portnumName || portnumName === 'Unknown') return;
+
+                    try {
+                        const url = new URL('/api/stats/packet-types/nodes', window.location.origin);
+                        url.searchParams.set('portnum_name', portnumName);
+                        const hoursSelect = document.getElementById('timeRange');
+                        if (hoursSelect && hoursSelect.value) {
+                            url.searchParams.set('hours', hoursSelect.value);
+                        }
+
+                        const resp = await fetch(url.toString());
+                        if (!resp.ok) {
+                            throw new Error(`HTTP ${resp.status}`);
+                        }
+                        const nodes = await resp.json();
+                        renderNodeTable('hottestNodesTable', Array.isArray(nodes) ? nodes : []);
+                    } catch (err) {
+                        console.error('Failed to load nodes for packet type', portnumName, err);
+                    }
+                }
+            }
+        });
+    }
+
+    function renderChannelsChart(data) {
+        const canvas = document.getElementById('channelsChart');
+        if (!canvas) {
+            console.error('channelsChart canvas not found');
+            return;
+        }
+
+        if (typeof Chart === 'undefined') {
+            console.error('Chart.js is not available');
+            showError('channelsChart', 'Chart.js library is not loaded');
+            return;
+        }
+
+        resetChartContainer(canvas);
+        if (chartInstances.channelsChart) {
+            chartInstances.channelsChart.destroy();
+        }
+
+        const channels = (data && data.channels) || [];
+        if (!channels.length) {
+            replaceChartWithMessage(canvas, 'No channel data available');
+            return;
+        }
+
+        const labels = channels.map(c => c.channel_id || 'Unknown');
+        const packetCounts = channels.map(c => c.packet_count || 0);
+        const nodeCounts = channels.map(c => c.unique_nodes || 0);
+
+        const ctx = canvas.getContext('2d');
+        chartInstances.channelsChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Packets',
+                        data: packetCounts,
+                        backgroundColor: `${palette.primary}cc`,
+                        borderColor: palette.primary,
+                        borderWidth: 1.5,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Unique Nodes',
+                        data: nodeCounts,
+                        backgroundColor: `${palette.success}cc`,
+                        borderColor: palette.success,
+                        borderWidth: 1.5,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'top' },
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Packets' }
+                    },
+                    y1: {
+                        beginAtZero: true,
+                        position: 'right',
+                        grid: { drawOnChartArea: false },
+                        title: { display: true, text: 'Nodes' }
+                    }
+                }
+            }
+        });
+    }
+
+    function renderGatewayChart(data) {
+        const canvas = document.getElementById('gatewayChart');
+        if (!canvas) {
+            console.error('gatewayChart canvas not found');
+            return;
+        }
+
+        if (typeof Chart === 'undefined') {
+            console.error('Chart.js is not available');
+            showError('gatewayChart', 'Chart.js library is not loaded');
+            return;
+        }
+
+        resetChartContainer(canvas);
+        if (chartInstances.gatewayChart) {
+            chartInstances.gatewayChart.destroy();
+        }
+
+        const gateways = (data && (data.gateway_distribution || data.gateways)) || [];
+        if (!gateways.length) {
+            replaceChartWithMessage(canvas, 'No gateway activity available');
+            return;
+        }
+
+        const topGateways = gateways.slice(0, 8);
+        const labels = topGateways.map(g => g.gateway_id || 'Unknown');
+        const packetCounts = topGateways.map(g => g.packet_count || 0);
+        const uniqueSources = topGateways.map(g => g.unique_sources || 0);
+
+        const ctx = canvas.getContext('2d');
+        chartInstances.gatewayChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'Packets',
+                        data: packetCounts,
+                        backgroundColor: `${palette.primary}d9`,
+                        borderColor: palette.primary,
+                        borderWidth: 1.5,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Unique Sources',
+                        data: uniqueSources,
+                        backgroundColor: `${palette.purple}cc`,
+                        borderColor: palette.purple,
+                        borderWidth: 1.5,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'top' } },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Packets' }
+                    },
+                    y1: {
+                        beginAtZero: true,
+                        position: 'right',
+                        grid: { drawOnChartArea: false },
+                        title: { display: true, text: 'Nodes' }
+                    }
+                }
+            }
+        });
+    }
+
+    function renderDeliveryChart(data) {
+        const canvas = document.getElementById('deliveryChart');
+        if (!canvas) {
+            console.error('deliveryChart canvas not found');
+            return;
+        }
+
+        if (typeof Chart === 'undefined') {
+            console.error('Chart.js is not available');
+            showError('deliveryChart', 'Chart.js library is not loaded');
+            return;
+        }
+
+        resetChartContainer(canvas);
+        if (chartInstances.deliveryChart) {
+            chartInstances.deliveryChart.destroy();
+        }
+
+        const breakdown = (data && data.hourly_breakdown) || [];
+        if (!breakdown.length) {
+            replaceChartWithMessage(canvas, 'No delivery data available');
+            return;
+        }
+
+        const sorted = breakdown.slice().sort((a, b) => a.hour - b.hour);
+        const sliceCount = Math.min(sorted.length, currentHours >= 24 ? 24 : currentHours);
+        const recent = sorted.slice(-sliceCount);
+
+        const labels = recent.map(d => `${String(d.hour).padStart(2, '0')}:00`);
+        const totals = recent.map(d => d.total_packets || 0);
+        const successRates = recent.map(d => Math.max(0, Math.min(100, d.success_rate || 0)));
+
+        const ctx = canvas.getContext('2d');
+        chartInstances.deliveryChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        type: 'bar',
+                        label: 'Packets',
+                        data: totals,
+                        backgroundColor: `${palette.success}b3`,
+                        borderColor: palette.success,
+                        borderWidth: 1.5,
+                        yAxisID: 'y'
+                    },
+                    {
+                        type: 'line',
+                        label: 'Success Rate (%)',
+                        data: successRates,
+                        borderColor: palette.primary,
+                        backgroundColor: `${palette.primary}33`,
+                        tension: 0.35,
+                        fill: false,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: { legend: { position: 'top' } },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Packets' }
+                    },
+                    y1: {
+                        beginAtZero: true,
+                        max: 100,
+                        position: 'right',
+                        grid: { drawOnChartArea: false },
+                        title: { display: true, text: 'Success Rate (%)' }
+                    }
+                }
+            }
+        });
+    }
+
+    function renderSignalQualityChart(data) {
+        const canvas = document.getElementById('signalQualityChart');
+        if (!canvas) {
+            console.error('signalQualityChart canvas not found');
+            return;
+        }
+
+        if (typeof Chart === 'undefined') {
+            console.error('Chart.js is not available');
+            showError('signalQualityChart', 'Chart.js library is not loaded');
+            return;
+        }
+
+        resetChartContainer(canvas);
+        if (chartInstances.signalQualityChart) {
+            chartInstances.signalQualityChart.destroy();
+        }
+
+        const labels = ['Excellent', 'Good', 'Fair', 'Poor'];
+        const rssi = data && data.rssi_distribution ? data.rssi_distribution : {};
+        const snr = data && data.snr_distribution ? data.snr_distribution : {};
+        const rssiData = labels.map(label => rssi[label.toLowerCase()] || 0);
+        const snrData = labels.map(label => snr[label.toLowerCase()] || 0);
+
+        if (rssiData.every(v => v === 0) && snrData.every(v => v === 0)) {
+            replaceChartWithMessage(canvas, 'No signal samples available');
+            return;
+        }
+
+        const ctx = canvas.getContext('2d');
+        chartInstances.signalQualityChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'RSSI samples',
+                        data: rssiData,
+                        backgroundColor: `${palette.info}c9`,
+                        borderColor: palette.info,
+                        borderWidth: 1.5
+                    },
+                    {
+                        label: 'SNR samples',
+                        data: snrData,
+                        backgroundColor: `${palette.warning}c9`,
+                        borderColor: palette.warning,
+                        borderWidth: 1.5
+                    }
+                ]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { beginAtZero: true, ticks: { precision: 0 } },
+                    y: { beginAtZero: true }
+                },
+                plugins: { legend: { position: 'bottom' } }
+            }
+        });
+    }
+
+    function renderNetworkHealth(data) {
+        const container = document.getElementById('networkOverview');
+        if (!container) return;
+
+        const uniqueNodes = data.unique_nodes || 0;
+        const totalPackets = data.total_packets || 0;
+        const avgRSSI = typeof data.avg_rssi === 'number' ? data.avg_rssi.toFixed(1) : 'N/A';
+        const avgSNR = typeof data.avg_snr === 'number' ? data.avg_snr.toFixed(2) : 'N/A';
+        const totalNodesMesh = data.total_nodes || 0;
+        const dataSentMiB = typeof data.data_sent_mib === 'number' ? data.data_sent_mib.toFixed(2) : '0.00';
+        const totalPacketsAllTime = data.total_packets_all_time || 0;
+        const dataSentMiBAllTime = typeof data.data_sent_mib_all_time === 'number'
+            ? data.data_sent_mib_all_time.toFixed(2)
+            : '0.00';
+
+        const uniqueNodesEl = document.getElementById('uniqueNodes');
+        const totalPacketsEl = document.getElementById('totalPackets');
+        const avgRSSIEl = document.getElementById('avgRSSI');
+        const avgSNREl = document.getElementById('avgSNR');
+        const totalNodesMeshEl = document.getElementById('totalNodesMesh');
+        const dataSentMiBEl = document.getElementById('dataSentMiB');
+
+        if (uniqueNodesEl) uniqueNodesEl.textContent = uniqueNodes.toLocaleString();
+        if (totalPacketsEl) totalPacketsEl.textContent = totalPackets.toLocaleString();
+        if (avgRSSIEl) avgRSSIEl.textContent = avgRSSI;
+        if (avgSNREl) avgSNREl.textContent = avgSNR;
+        if (totalNodesMeshEl) totalNodesMeshEl.textContent = totalNodesMesh.toLocaleString();
+        if (dataSentMiBEl) dataSentMiBEl.textContent = dataSentMiB;
+
+        container.innerHTML = `
+            <div class="small text-body">
+                <div class="mb-1"><strong>Time Period:</strong> Last ${currentHours} hour${currentHours !== 1 ? 's' : ''}</div>
+                <div class="mb-1"><strong>Active Nodes (window):</strong> ${uniqueNodes.toLocaleString()}</div>
+                <div class="mb-1"><strong>Total Mesh Nodes:</strong> ${totalNodesMesh.toLocaleString()}</div>
+                <div class="mb-1"><strong>Total Packets (window):</strong> ${totalPackets.toLocaleString()}</div>
+                <div class="mb-1"><strong>Data Sent (window):</strong> ${dataSentMiB} MiB</div>
+                <div class="mb-1"><strong>Total Packets (all time):</strong> ${totalPacketsAllTime.toLocaleString()}</div>
+                <div class="mb-1"><strong>Data Sent (all time):</strong> ${dataSentMiBAllTime} MiB</div>
+                <div class="mb-1"><strong>Average Signal Quality:</strong> ${avgRSSI} dBm RSSI, ${avgSNR} dB SNR</div>
+            </div>
+        `;
+    }
+
+    function showError(elementId, message) {
+        const element = document.getElementById(elementId);
+        if (!element) return;
+
+        if (element.tagName === 'CANVAS') {
+            replaceChartWithMessage(element, message);
+            return;
+        }
+
+        const tbody = element.querySelector ? element.querySelector('tbody') : null;
+        if (tbody) {
+            tbody.innerHTML = `<tr><td colspan="3" class="text-center py-4 text-danger">
+                <i class="bi bi-exclamation-triangle me-2"></i>${message}
+            </td></tr>`;
+            return;
+        }
+
+        element.innerHTML = `<div class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>${message}</div>`;
+    }
+
+    function replaceChartWithMessage(canvas, message) {
+        const container = canvas.closest('.chart-container') || canvas.parentElement;
+        if (container) {
+            let alert = container.querySelector('.chart-alert');
+            if (!alert) {
+                alert = document.createElement('div');
+                alert.className = 'alert alert-warning m-0 chart-alert';
+                container.appendChild(alert);
+            }
+            alert.innerHTML = `<i class="bi bi-exclamation-triangle me-2"></i>${message}`;
+            canvas.style.display = 'none';
+        }
+    }
+
+    function renderNodeNamingStats(data) {
+        const total = data.total_nodes ?? 0;
+        const custom = data.custom_named ?? 0;
+        const customPct = data.custom_named_pct ?? 0;
+
+        const customNamedNodesEl = document.getElementById('customNamedNodes');
+        const customNamedPctEl = document.getElementById('customNamedPct');
+
+        if (!customNamedNodesEl || !customNamedPctEl) return;
+
+        customNamedNodesEl.textContent = custom.toString();
+        if (total > 0) {
+            customNamedPctEl.textContent = `${customPct.toFixed(1)}% of ${total} nodes`;
+        } else {
+            customNamedPctEl.textContent = 'No nodes detected yet';
+        }
+    }
+
+    let highlightedNodesCache = [];
+
+    function renderHighlightedNodesTable(tableId, nodes) {
+        highlightedNodesCache = Array.isArray(nodes) ? nodes.slice() : [];
+
+        const select = document.getElementById('highlightMode');
+        const mode = select ? select.value : 'most_active';
+        const table = document.getElementById(tableId);
+        if (!table) return;
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+
+        tbody.innerHTML = '';
+
+        if (!highlightedNodesCache.length) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No data available</td></tr>';
+            return;
+        }
+
+        // Sort a copy based on current mode
+        const sorted = highlightedNodesCache.slice();
+        if (mode === 'weak_signal') {
+            sorted.sort((a, b) => {
+                const ar = a.avg_rssi ?? 0;
+                const br = b.avg_rssi ?? 0;
+                return ar - br; // weakest (most negative) first
+            });
+        } else {
+            sorted.sort((a, b) => (b.packet_count || 0) - (a.packet_count || 0));
+        }
+
+        sorted.forEach(node => {
+            const tr = document.createElement('tr');
+
+            const displayName = node.display_name || node.long_name || node.short_name || `Node ${node.node_id || 'Unknown'}`;
+            const initials = displayName.substring(0, 2).toUpperCase();
+            const nodeId = node.node_id || node.id || '';
+            const packets = node.packet_count || 0;
+
+            let signalClass = 'text-muted';
+            let signalLabel = 'N/A';
+            if (node.avg_rssi !== null && node.avg_rssi !== undefined) {
+                const rssi = node.avg_rssi;
+                if (rssi > -70) {
+                    signalClass = 'text-success';
+                    signalLabel = 'Excellent';
+                } else if (rssi > -80) {
+                    signalClass = 'text-warning';
+                    signalLabel = 'Good';
+                } else if (rssi > -90) {
+                    signalClass = 'text-info';
+                    signalLabel = 'Fair';
+                } else {
+                    signalClass = 'text-danger';
+                    signalLabel = 'Poor';
+                }
+            }
+
+            tr.innerHTML = `
+                <td>
+                    <div class="d-flex align-items-center">
+                        <div class="node-avatar me-2" style="background-color: ${stringToColor(String(nodeId))}">
+                            ${initials}
+                        </div>
+                        <div>
+                            <div class="fw-bold text-truncate" style="max-width: 180px;">
+                                <a href="/node/${nodeId}" class="text-decoration-none text-body">
+                                    ${displayName}
+                                </a>
+                            </div>
+                            <div class="small text-muted text-truncate" style="max-width: 200px;">
+                                ${node.hw_model || 'Unknown Node'}
+                            </div>
+                        </div>
+                    </div>
+                </td>
+                <td class="text-center">
+                    <span class="badge bg-primary text-white border">
+                        ${packets.toLocaleString()}
+                    </span>
+                </td>
+                <td class="text-end">
+                    <span class="${signalClass} small">
+                        ${signalLabel}${node.avg_rssi !== null && node.avg_rssi !== undefined ? ` (${node.avg_rssi.toFixed(1)} dBm)` : ''}
+                    </span>
+                </td>
+            `;
+
+            tbody.appendChild(tr);
+        });
+    }
+
+    const highlightModeSelect = document.getElementById('highlightMode');
+    if (highlightModeSelect) {
+        highlightModeSelect.addEventListener('change', () => {
+            renderHighlightedNodesTable('highlightedNodesTable', highlightedNodesCache);
+        });
+    }
+
+    function renderSignalNodesTable(tableId, nodes) {
+        const table = document.getElementById(tableId);
+        if (!table) return;
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+
+        tbody.innerHTML = '';
+
+        if (!nodes || !nodes.length) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No data available</td></tr>';
+            return;
+        }
+
+        nodes.forEach(node => {
+            const tr = document.createElement('tr');
+
+            const displayName = node.display_name || node.long_name || node.short_name || `Node ${node.node_id || 'Unknown'}`;
+            const initials = displayName.substring(0, 2).toUpperCase();
+            const nodeId = node.node_id || node.id || '';
+            const packets = node.packet_count || 0;
+            const rssi = node.avg_rssi;
+            const snr = node.avg_snr;
+
+            let signalClass = 'bg-secondary';
+            let signalLabel = 'N/A';
+            if (rssi !== null && rssi !== undefined) {
+                if (rssi > -70) {
+                    signalClass = 'bg-success';
+                    signalLabel = 'Excellent';
+                } else if (rssi > -80) {
+                    signalClass = 'bg-warning';
+                    signalLabel = 'Good';
+                } else if (rssi > -90) {
+                    signalClass = 'bg-info';
+                    signalLabel = 'Fair';
+                } else {
+                    signalClass = 'bg-danger';
+                    signalLabel = 'Poor';
+                }
+            }
+
+            // Map RSSI range (-120 to -60) into 0–100 gauge
+            let gaugeValue = 0;
+            if (rssi !== null && rssi !== undefined) {
+                const clamped = Math.max(-120, Math.min(-60, rssi));
+                gaugeValue = Math.round(((clamped + 120) / 60) * 100);
+            }
+
+            tr.innerHTML = `
+                <td>
+                    <div class="d-flex align-items-center">
+                        <div class="node-avatar me-2" style="background-color: ${stringToColor(String(nodeId))}">
+                            ${initials}
+                        </div>
+                        <div>
+                            <div class="fw-bold text-truncate" style="max-width: 180px;">
+                                <a href="/node/${nodeId}" class="text-decoration-none text-body">
+                                    ${displayName}
+                                </a>
+                            </div>
+                            <div class="small text-muted text-truncate" style="max-width: 200px;">
+                                ${node.hw_model || 'Unknown Node'}
+                            </div>
+                        </div>
+                    </div>
+                </td>
+                <td class="text-center">
+                    <span class="badge bg-primary text-white border">
+                        ${packets.toLocaleString()}
+                    </span>
+                </td>
+                <td class="text-end" style="min-width: 200px;">
+                    <div class="d-flex flex-column align-items-end gap-1">
+                        <div class="progress w-100" style="height: 0.6rem;">
+                            <div class="progress-bar ${signalClass}" role="progressbar"
+                                 style="width: ${gaugeValue}%;"
+                                 aria-valuenow="${gaugeValue}" aria-valuemin="0" aria-valuemax="100">
+                            </div>
+                        </div>
+                        <div class="small text-muted">
+                            ${signalLabel}${rssi !== null && rssi !== undefined ? ` • RSSI ${rssi.toFixed(1)} dBm` : ''}
+                            ${snr !== null && snr !== undefined ? ` • SNR ${snr.toFixed(1)} dB` : ''}
+                        </div>
+                    </div>
+                </td>
+            `;
+
+            tbody.appendChild(tr);
+        });
+    }
+
+    function resetChartContainer(canvas) {
+        const container = canvas.closest('.chart-container') || canvas.parentElement;
+        if (container) {
+            const alert = container.querySelector('.chart-alert');
+            if (alert) {
+                alert.remove();
+            }
+        }
+        canvas.style.display = 'block';
+    }
+
+    function renderNodeTable(tableId, nodes) {
+        const table = document.getElementById(tableId);
+        if (!table) return;
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+
+        tbody.innerHTML = '';
+
+        if (!nodes || nodes.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No data available</td></tr>';
+            return;
+        }
+
+        nodes.forEach(node => {
+            const tr = document.createElement('tr');
+
+            let lastSeen = 'Unknown';
+            if (node.last_seen) {
+                if (typeof node.last_seen === 'number') {
+                    lastSeen = moment.unix(node.last_seen).fromNow();
+                } else {
+                    lastSeen = moment(node.last_seen).fromNow();
+                }
+            }
+
+            const displayName = node.display_name || node.name || `Node ${node.node_id || 'Unknown'}`;
+            const initials = displayName.substring(0, 2).toUpperCase();
+            const nodeId = node.node_id || node.id || '';
+
+            // Determine temperature badge color
+            let tempBadgeClass = 'bg-secondary';
+            if (node.temperature !== undefined) {
+                if (node.temperature >= 25) {
+                    tempBadgeClass = 'bg-danger';
+                } else if (node.temperature >= 15) {
+                    tempBadgeClass = 'bg-warning';
+                } else if (node.temperature >= 0) {
+                    tempBadgeClass = 'bg-info';
+                } else {
+                    tempBadgeClass = 'bg-primary';
+                }
+            }
+
+            tr.innerHTML = `
+                <td>
+                    <div class="d-flex align-items-center">
+                        <div class="node-avatar me-2" style="background-color: ${stringToColor(String(nodeId))}">
+                            ${initials}
+                        </div>
+                        <div>
+                            <div class="fw-bold text-truncate" style="max-width: 150px;">
+                                <a href="/node/${nodeId}" class="text-decoration-none text-body">
+                                    ${displayName}
+                                </a>
+                            </div>
+                            <div class="small text-muted">${node.hw_model || 'Unknown Node'}</div>
+                        </div>
+                    </div>
+                </td>
+                <td class="text-center">
+                    ${node.temperature !== undefined ?
+                        `<span class="badge ${tempBadgeClass} text-white border">
+                            ${node.temperature.toFixed(1)}°C
+                        </span>` :
+                        '<span class="badge bg-secondary text-white border">N/A</span>'
+                    }
+                </td>
+                <td class="text-end text-muted small">
+                    ${lastSeen}
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function renderTopChannelUtilizersTable(tableId, nodes) {
+        const table = document.getElementById(tableId);
+        if (!table) return;
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+
+        tbody.innerHTML = '';
+
+        if (!nodes || nodes.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No data available</td></tr>';
+            return;
+        }
+
+        nodes.forEach(node => {
+            const tr = document.createElement('tr');
+
+            const displayName = node.display_name || node.long_name || node.short_name || `Node ${node.node_id || 'Unknown'}`;
+            const initials = displayName.substring(0, 2).toUpperCase();
+            const nodeId = node.node_id || node.id || '';
+            const channels = Array.isArray(node.channels) ? node.channels.filter(Boolean) : [];
+            const channelCount = node.channel_count || channels.length || 0;
+            const packetCount = node.packet_count || 0;
+
+            const channelList = channels.length ? channels.join(', ') : 'N/A';
+
+            tr.innerHTML = `
+                <td>
+                    <div class="d-flex align-items-center">
+                        <div class="node-avatar me-2" style="background-color: ${stringToColor(String(nodeId))}">
+                            ${initials}
+                        </div>
+                        <div>
+                            <div class="fw-bold text-truncate" style="max-width: 200px;">
+                                <a href="/node/${nodeId}" class="text-decoration-none text-body">
+                                    ${displayName}
+                                </a>
+                            </div>
+                            <div class="small text-muted text-truncate" style="max-width: 220px;">
+                                Channels: ${channelList}
+                            </div>
+                        </div>
+                    </div>
+                </td>
+                <td class="text-center">
+                    <span class="badge bg-info text-white border">
+                        ${channelCount}
+                    </span>
+                </td>
+                <td class="text-end">
+                    ${packetCount.toLocaleString()}
+                </td>
+            `;
+
+            tbody.appendChild(tr);
+        });
+    }
+
+    function renderGatewayStatusTable(tableId, data) {
+        const table = document.getElementById(tableId);
+        if (!table) return;
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+
+        tbody.innerHTML = '';
+
+        const gateways = Array.isArray(data.gateways) ? data.gateways : [];
+        if (!gateways.length) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No gateway data available</td></tr>';
+            return;
+        }
+
+        gateways.forEach(gw => {
+            const tr = document.createElement('tr');
+            const gatewayId = gw.gateway_id || gw.id || 'Unknown';
+            const display = gatewayId;
+            const lastSeenStr = gw.last_seen_str || 'Unknown';
+            const online = !!gw.online;
+
+            const badgeClass = online ? 'bg-success' : 'bg-secondary';
+            const badgeText = online ? 'Online' : 'Offline';
+
+            tr.innerHTML = `
+                <td>
+                    <div class="d-flex align-items-center">
+                        <span class="badge bg-dark me-2">${gatewayId}</span>
+                        <span class="small text-muted">${gw.unique_sources || 0} sources</span>
+                    </div>
+                </td>
+                <td class="text-center">
+                    <span class="badge ${badgeClass} text-white border">
+                        ${badgeText}
+                    </span>
+                </td>
+                <td class="text-end small text-muted">
+                    ${lastSeenStr}
+                </td>
+            `;
+
+            tbody.appendChild(tr);
+        });
+    }
+
+    function renderUtilizationChart(data) {
+        const canvas = document.getElementById('utilizationChart');
+        if (!canvas) {
+            console.error('Utilization chart canvas not found');
+            return;
+        }
+
+        if (typeof Chart === 'undefined') {
+            console.error('Chart.js is not available');
+            showError('utilizationChart', 'Chart.js library is not loaded');
+            return;
+        }
+
+        resetChartContainer(canvas);
+        if (chartInstances.utilizationChart) {
+            chartInstances.utilizationChart.destroy();
+        }
+
+        const ctx = canvas.getContext('2d');
+        const hourlyData = data.hourly_utilization || [];
+
+        const labels = [];
+        const packetCounts = [];
+        const byteCounts = [];
+
+        for (let i = 0; i < 24; i++) {
+            const hourData = hourlyData.find(d => d.hour === i);
+            labels.push(`${i}:00`);
+            packetCounts.push(hourData ? hourData.packet_count : 0);
+            byteCounts.push(hourData ? hourData.total_bytes : 0);
+        }
+
+        chartInstances.utilizationChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Packets',
+                        data: packetCounts,
+                        borderColor: palette.primary,
+                        backgroundColor: `${palette.primary}1a`,
+                        yAxisID: 'y',
+                        tension: 0.4,
+                        fill: true
+                    },
+                    {
+                        label: 'Bytes',
+                        data: byteCounts,
+                        borderColor: palette.success,
+                        backgroundColor: `${palette.success}1a`,
+                        yAxisID: 'y1',
+                        tension: 0.4,
+                        fill: true
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                    }
+                },
+                scales: {
+                    y: {
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        stacked: true,
+                        title: { display: true, text: 'Packets' }
+                    },
+                    y1: {
+                        type: 'linear',
+                        display: true,
+                        position: 'right',
+                        stacked: true,
+                        title: { display: true, text: 'Bytes' },
+                        grid: {
+                            drawOnChartArea: false,
+                        },
+                    }
+                }
+            }
+        });
+    }
+
+    function stringToColor(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        const c = (hash & 0x00FFFFFF).toString(16).toUpperCase();
+        return '#' + '00000'.substring(0, 6 - c.length) + c;
+    }
+
+    function renderHopDistributionChart(data) {
+        const canvas = document.getElementById('hopDistributionChart');
+        if (!canvas) {
+            console.error('hopDistributionChart canvas not found');
+            return;
+        }
+
+        if (typeof Chart === 'undefined') {
+            console.error('Chart.js is not available');
+            showError('hopDistributionChart', 'Chart.js library is not loaded');
+            return;
+        }
+
+        resetChartContainer(canvas);
+        if (chartInstances.hopDistributionChart) {
+            chartInstances.hopDistributionChart.destroy();
+        }
+
+        const distribution = (data && data.distribution) || [];
+        const summary = (data && data.summary) || {};
+
+        if (!distribution.length) {
+            replaceChartWithMessage(canvas, 'No routing data available');
+            return;
+        }
+
+        const labels = distribution.map(d => `${d.hop_count || 0} hop${d.hop_count !== 1 ? 's' : ''}`);
+        const packetCounts = distribution.map(d => d.packet_count || 0);
+        const nodeCounts = distribution.map(d => d.unique_nodes || 0);
+
+        const ctx = canvas.getContext('2d');
+        chartInstances.hopDistributionChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'Packets',
+                        data: packetCounts,
+                        backgroundColor: `${palette.primary}cc`,
+                        borderColor: palette.primary,
+                        borderWidth: 1.5,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Unique Nodes',
+                        data: nodeCounts,
+                        backgroundColor: `${palette.success}cc`,
+                        borderColor: palette.success,
+                        borderWidth: 1.5,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        callbacks: {
+                            footer: (items) => {
+                                if (summary.avg_hops !== undefined) {
+                                    return `Avg: ${summary.avg_hops.toFixed(1)} hops | Direct: ${summary.direct_packets || 0} | Routed: ${summary.routed_packets || 0}`;
+                                }
+                                return '';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Packets' }
+                    },
+                    y1: {
+                        beginAtZero: true,
+                        position: 'right',
+                        grid: { drawOnChartArea: false },
+                        title: { display: true, text: 'Nodes' }
+                    }
+                }
+            }
+        });
+    }
+
+    function renderHardwareModelsChart(data) {
+        const canvas = document.getElementById('hardwareModelsChart');
+        if (!canvas) {
+            console.error('hardwareModelsChart canvas not found');
+            return;
+        }
+
+        if (typeof Chart === 'undefined') {
+            console.error('Chart.js is not available');
+            showError('hardwareModelsChart', 'Chart.js library is not loaded');
+            return;
+        }
+
+        resetChartContainer(canvas);
+        if (chartInstances.hardwareModelsChart) {
+            chartInstances.hardwareModelsChart.destroy();
+        }
+
+        if (!data || !data.length) {
+            replaceChartWithMessage(canvas, 'No hardware model data available');
+            return;
+        }
+
+        const topModels = data.slice(0, 10);
+        const labels = topModels.map(m => m.hw_model || 'Unknown');
+        const nodeCounts = topModels.map(m => m.unique_nodes || 0);
+        const packetCounts = topModels.map(m => m.packet_count || 0);
+
+        const ctx = canvas.getContext('2d');
+        chartInstances.hardwareModelsChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'Unique Nodes',
+                        data: nodeCounts,
+                        backgroundColor: `${palette.info}cc`,
+                        borderColor: palette.info,
+                        borderWidth: 1.5,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Packets',
+                        data: packetCounts,
+                        backgroundColor: `${palette.warning}cc`,
+                        borderColor: palette.warning,
+                        borderWidth: 1.5,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'top' } },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Nodes' }
+                    },
+                    y1: {
+                        beginAtZero: true,
+                        position: 'right',
+                        grid: { drawOnChartArea: false },
+                        title: { display: true, text: 'Packets' }
+                    }
+                }
+            }
+        });
+    }
+
+    function renderPeakHoursChart(data) {
+        const canvas = document.getElementById('peakHoursChart');
+        if (!canvas) {
+            console.error('peakHoursChart canvas not found');
+            return;
+        }
+
+        if (typeof Chart === 'undefined') {
+            console.error('Chart.js is not available');
+            showError('peakHoursChart', 'Chart.js library is not loaded');
+            return;
+        }
+
+        resetChartContainer(canvas);
+        if (chartInstances.peakHoursChart) {
+            chartInstances.peakHoursChart.destroy();
+        }
+
+        const hourlyData = (data && data.hourly_data) || [];
+        if (!hourlyData.length) {
+            replaceChartWithMessage(canvas, 'No hourly activity data available');
+            return;
+        }
+
+        // Fill in missing hours with 0
+        const hourMap = new Map();
+        hourlyData.forEach(h => {
+            hourMap.set(parseInt(h.hour), h);
+        });
+
+        const labels = [];
+        const packetCounts = [];
+        const nodeCounts = [];
+
+        for (let i = 0; i < 24; i++) {
+            labels.push(`${i}:00`);
+            const hourData = hourMap.get(i) || { packet_count: 0, unique_nodes: 0 };
+            packetCounts.push(hourData.packet_count || 0);
+            nodeCounts.push(hourData.unique_nodes || 0);
+        }
+
+        const ctx = canvas.getContext('2d');
+        chartInstances.peakHoursChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'Packets',
+                        data: packetCounts,
+                        borderColor: palette.primary,
+                        backgroundColor: `${palette.primary}1a`,
+                        tension: 0.4,
+                        fill: true,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Active Nodes',
+                        data: nodeCounts,
+                        borderColor: palette.success,
+                        backgroundColor: `${palette.success}1a`,
+                        tension: 0.4,
+                        fill: true,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        callbacks: {
+                            footer: (items) => {
+                                const peakHours = (data && data.peak_hours) || [];
+                                if (peakHours.length) {
+                                    const hours = peakHours.map(h => `${h.hour}:00`).join(', ');
+                                    return `Peak hours: ${hours}`;
+                                }
+                                return '';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Packets' }
+                    },
+                    y1: {
+                        beginAtZero: true,
+                        position: 'right',
+                        grid: { drawOnChartArea: false },
+                        title: { display: true, text: 'Nodes' }
+                    }
+                }
+            }
+        });
+    }
+})();
+</script>
+
+<style>
+    .node-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: bold;
+        font-size: 0.8rem;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    }
+</style>
+{% endblock %}

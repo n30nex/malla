@@ -3,6 +3,7 @@
   let markers = {};
   let nodeLocations = new Map();
   let polylines = [];
+  let polylineLayer = null;
   let gatewayHalos = new Map();
   let gatewayActivity = new Map(); // gatewayId -> {lastSeen, count}
   let markerLayer = null;
@@ -23,6 +24,19 @@
   let arcLifeMs = 120000; // fade packet arcs after ~2 minutes
   let tracerouteLabels = [];
   let nameLabels = new Map();
+  const MOBILE_THRESHOLD_METERS = 100; // Distance threshold for mobile node detection
+  let followingNodeId = null; // Currently followed node ID
+  let nodeTracks = new Map(); // nodeId -> Array of {lat, lng, timestamp}
+  // Fallback used if MOBILE_THRESHOLD_METERS is not defined in some older bundles
+  const MOBILE_THRESHOLD_FALLBACK = 100;
+  let selectedNodeId = null; // Currently selected node for details panel
+  let nodeDetailsPanel = null; // Reference to details panel element
+  let neighborLayer = null; // Layer for neighbor connections
+  let neighborsEnabled = false; // Toggle state for neighbor layer
+  let neighborConnections = new Map(); // Map of "node1:node2" -> {lastSeen, count, avgRssi, avgSnr}
+  let trailsLayer = null; // Layer for position history trails
+  let trailsEnabled = false; // Toggle state for trails
+  let nodeTrails = new Map(); // nodeId -> L.polyline for trail
 
   const portColors = {
     POSITION_APP: "#0d6efd",
@@ -75,8 +89,16 @@
     markerLayer = L.layerGroup().addTo(map);
     nameLabelLayer = L.layerGroup().addTo(map);
     clusterLayer = L.markerClusterGroup({ disableClusteringAtZoom: 12 });
+    polylineLayer = L.layerGroup().addTo(map);
+    neighborLayer = L.layerGroup().addTo(map);
+    trailsLayer = L.layerGroup().addTo(map);
 
     gatewayLayerGroup = L.layerGroup().addTo(map);
+
+    // Update name labels on zoom change
+    map.on('zoomend', () => {
+      updateAllNameLabels();
+    });
 
     // Click passthrough for compact legend
     if (legendCompact) {
@@ -119,8 +141,47 @@
       node._lastSeenMs = Number.isFinite(tsGuess) ? tsGuess : Date.now();
     }
     if (markers[node.node_id]) {
+      const marker = markers[node.node_id];
+      const oldLatLng = marker.getLatLng();
+      const newLatLng = L.latLng(node.latitude, node.longitude);
+
+      // Mobile Detection Logic (defensive against missing constant in older bundles)
+      const distance = oldLatLng.distanceTo(newLatLng);
+      const mobileThreshold =
+        typeof MOBILE_THRESHOLD_METERS === "number" ? MOBILE_THRESHOLD_METERS : MOBILE_THRESHOLD_FALLBACK;
+      if (distance > mobileThreshold) {
+        showMobileToast(node);
+      }
+
+      marker.setLatLng(newLatLng);
+
+      // Update track if following or if track exists
+      if (followingNodeId === node.node_id || nodeTracks.has(node.node_id)) {
+        updateNodeTrack(node.node_id, newLatLng);
+      }
+
+      // Pan map if following
+      if (followingNodeId === node.node_id) {
+        map.panTo(newLatLng);
+      }
+
       attachMarkerHover(node.node_id);
       updateMarkerStyle(node.node_id);
+
+      // Ensure click handler is attached (in case marker was recreated)
+      marker.off('click');
+      marker.on('click', () => {
+        showNodeDetails(node.node_id);
+      });
+
+      // Trigger highlight animation on update
+      const el = marker.getElement();
+      if (el) {
+        el.classList.remove("live-map-marker-highlight");
+        void el.offsetWidth; // trigger reflow
+        el.classList.add("live-map-marker-highlight");
+        setTimeout(() => el.classList.remove("live-map-marker-highlight"), 1200);
+      }
       return;
     }
 
@@ -138,6 +199,11 @@
     marker.bindPopup(
       `<strong>${node.display_name || node.long_name || node.short_name || node.node_id}</strong>`
     );
+
+    // Add click handler for node details panel
+    marker.on('click', () => {
+      showNodeDetails(node.node_id);
+    });
 
     markers[node.node_id] = marker;
     attachMarkerHover(node.node_id);
@@ -244,6 +310,10 @@
   function refreshAges() {
     nodeLocations.forEach((_loc, id) => updateMarkerStyle(id));
     prunePolylines();
+    // Update trails when time window changes
+    if (trailsEnabled) {
+      updateAllTrails();
+    }
   }
 
   function ensureNameLabel(node) {
@@ -265,13 +335,41 @@
         interactive: false,
         keyboard: false,
       });
-      label.addTo(nameLabelLayer);
       nameLabels.set(node.node_id, label);
     } else {
       label.setLatLng([node.latitude, node.longitude]);
       const el = label.getElement();
       if (el) el.innerHTML = `<div>${name}</div>`;
     }
+    // Update visibility based on cluster state and zoom
+    updateNameLabelVisibility(label, node.node_id);
+  }
+
+  function updateNameLabelVisibility(label, nodeId) {
+    if (!label || !map) return;
+    const zoom = map.getZoom();
+    const zoomThreshold = 10; // Show names when zoomed in past level 10
+
+    // Show names if:
+    // 1. Clusters are disabled, OR
+    // 2. Clusters are enabled but zoom is above threshold
+    const shouldShow = !clusterEnabled || zoom >= zoomThreshold;
+
+    if (shouldShow) {
+      if (!nameLabelLayer.hasLayer(label)) {
+        label.addTo(nameLabelLayer);
+      }
+    } else {
+      if (nameLabelLayer.hasLayer(label)) {
+        nameLabelLayer.removeLayer(label);
+      }
+    }
+  }
+
+  function updateAllNameLabels() {
+    nameLabels.forEach((label, nodeId) => {
+      updateNameLabelVisibility(label, nodeId);
+    });
   }
 
   function placeMarkerOnLayer(marker) {
@@ -328,13 +426,45 @@
     });
   }
 
+  function getSignalQuality(rssi, snr) {
+    // Determine signal quality based on RSSI and SNR
+    // Excellent: RSSI > -90dBm, SNR > 10dB
+    // Good: RSSI -90 to -100dBm, SNR 5-10dB
+    // Fair: RSSI -100 to -110dBm, SNR 0-5dB
+    // Poor: RSSI < -110dBm, SNR < 0dB
+    if (rssi == null && snr == null) return null;
+
+    const rssiVal = rssi != null ? Number(rssi) : -120;
+    const snrVal = snr != null ? Number(snr) : -10;
+
+    if (rssiVal > -90 && snrVal > 10) {
+      return { quality: "excellent", color: "#28a745", weight: 4 };
+    } else if (rssiVal > -100 && snrVal > 5) {
+      return { quality: "good", color: "#7cb342", weight: 3.5 };
+    } else if (rssiVal > -110 && snrVal > 0) {
+      return { quality: "fair", color: "#ffc107", weight: 3 };
+    } else {
+      return { quality: "poor", color: "#dc3545", weight: 2 };
+    }
+  }
+
   function drawLink(fromNodeId, toNodeId, packet, opts = {}) {
     const fromLoc = nodeLocations.get(fromNodeId);
     const toLoc = nodeLocations.get(toNodeId);
     if (!fromLoc || !toLoc) return;
 
-    const color =
-      portColors[packet.portnum_name] || (packet.processed_successfully ? "#6f42c1" : "#dc3545");
+    // Determine color and weight based on signal strength if available
+    let color, weight;
+    const signalInfo = getSignalQuality(packet.rssi, packet.snr);
+
+    if (signalInfo && opts.useSignalStrength !== false) {
+      color = signalInfo.color;
+      weight = signalInfo.weight;
+    } else {
+      // Fall back to port-based coloring
+      color = portColors[packet.portnum_name] || (packet.processed_successfully ? "#6f42c1" : "#dc3545");
+      weight = opts.weight || 3;
+    }
 
     const line = L.polyline(
       [
@@ -343,12 +473,29 @@
       ],
       {
         color,
-        weight: opts.weight || 3,
+        weight: weight,
         opacity: opts.opacity ?? 0.8,
-        dashArray: opts.dashArray || "10 14",
+        dashArray: opts.dashArray || "6 12", // Tighter dash for better flow effect
         className: "live-arc",
       }
-    ).addTo(map);
+    );
+
+    // Add signal strength tooltip if available
+    if (signalInfo && (packet.rssi != null || packet.snr != null)) {
+      const rssiStr = packet.rssi != null ? `${packet.rssi.toFixed(1)} dBm` : "N/A";
+      const snrStr = packet.snr != null ? `${packet.snr.toFixed(1)} dB` : "N/A";
+      line.bindTooltip(
+        `Signal: ${signalInfo.quality.toUpperCase()}<br>RSSI: ${rssiStr}<br>SNR: ${snrStr}`,
+        { permanent: false, direction: "top", className: "signal-tooltip" }
+      );
+    }
+
+    // Add to polyline layer if it exists, otherwise add directly to map
+    if (polylineLayer) {
+      line.addTo(polylineLayer);
+    } else {
+      line.addTo(map);
+    }
 
     // Ensure the SVG path has the animation class (Leaflet sometimes drops custom class on updates)
     const pathEl = line.getElement?.();
@@ -424,6 +571,118 @@
     }
   }
 
+  function updateNodeTrack(nodeId, latLng) {
+    if (!nodeId || !latLng) return;
+    if (!nodeTracks.has(nodeId)) {
+      nodeTracks.set(nodeId, []);
+    }
+    const track = nodeTracks.get(nodeId);
+    track.push({
+      lat: latLng.lat,
+      lng: latLng.lng,
+      timestamp: Date.now()
+    });
+    // Keep only last 100 points per track
+    if (track.length > 100) {
+      track.shift();
+    }
+
+    // Update trail visualization if enabled
+    if (trailsEnabled) {
+      updateNodeTrail(nodeId);
+    }
+  }
+
+  function updateNodeTrail(nodeId) {
+    if (!trailsLayer || !nodeId) return;
+
+    const track = nodeTracks.get(nodeId);
+    if (!track || track.length < 2) return;
+
+    // Remove existing trail for this node
+    const existingTrail = nodeTrails.get(nodeId);
+    if (existingTrail) {
+      trailsLayer.removeLayer(existingTrail);
+    }
+
+    // Filter track to only include points within display window
+    const now = Date.now();
+    const filteredTrack = track.filter(point => now - point.timestamp <= displayWindowMs);
+
+    if (filteredTrack.length < 2) return;
+
+    // Create polyline with gradient opacity (fade from recent to old)
+    const latlngs = filteredTrack.map(p => [p.lat, p.lng]);
+
+    // Use a color based on node role or default
+    const loc = nodeLocations.get(nodeId);
+    const roleStyle = loc ? getRoleStyle(loc.role) : roleColors.unknown;
+    const trailColor = roleStyle.fill;
+
+    // Calculate opacity gradient - more recent = more opaque
+    const oldestTime = filteredTrack[0].timestamp;
+    const newestTime = filteredTrack[filteredTrack.length - 1].timestamp;
+    const timeRange = newestTime - oldestTime;
+
+    // Create a multi-segment polyline with varying opacity
+    // For simplicity, use average opacity that fades based on age
+    const avgAge = now - ((oldestTime + newestTime) / 2);
+    const maxAge = displayWindowMs;
+    const baseOpacity = Math.max(0.2, 1 - (avgAge / maxAge));
+
+    const trail = L.polyline(latlngs, {
+      color: trailColor,
+      weight: 2,
+      opacity: baseOpacity * 0.6,
+      className: "node-trail",
+    });
+
+    trail.bindTooltip(
+      `Trail: ${filteredTrack.length} points<br>${formatRelative(newestTime)}`,
+      { permanent: false, direction: "top" }
+    );
+
+    trail.addTo(trailsLayer);
+    nodeTrails.set(nodeId, trail);
+  }
+
+  function updateAllTrails() {
+    if (!trailsEnabled) return;
+    nodeTracks.forEach((_track, nodeId) => {
+      updateNodeTrail(nodeId);
+    });
+  }
+
+  function updateTrailsLayer() {
+    if (trailsEnabled) {
+      updateAllTrails();
+      if (!map.hasLayer(trailsLayer)) {
+        map.addLayer(trailsLayer);
+      }
+    } else {
+      if (map.hasLayer(trailsLayer)) {
+        map.removeLayer(trailsLayer);
+      }
+      trailsLayer.clearLayers();
+      nodeTrails.clear();
+    }
+  }
+
+  function showMobileToast(node) {
+    // Optional: Show a notification when a node moves significantly
+    // This is a placeholder - can be enhanced with actual toast notifications
+    console.log(`Node ${node.node_id} moved significantly`);
+  }
+
+  function handleTextMessage(packet) {
+    // Handle text message packets - can be extended to show messages in UI
+    // For now, this is a no-op to prevent errors
+    if (packet && packet.portnum_name === 'TEXT_MESSAGE_APP') {
+      // Text messages are already handled in addActivityEntry
+      // This function can be extended for additional text message features
+    }
+  }
+
   function handlePacket(packet) {
     if (paused) return;
     if (portFilter.value && packet.portnum_name !== portFilter.value) return;
@@ -433,8 +692,8 @@
       packet.mesh_packet_id != null
         ? `mesh:${packet.mesh_packet_id}`
         : packet.id != null
-        ? `id:${packet.id}`
-        : `from:${packet.from_node_id || "?"}-to:${packet.to_node_id || "?"}-ts:${packet.timestamp || "?"}`;
+          ? `id:${packet.id}`
+          : `from:${packet.from_node_id || "?"}-to:${packet.to_node_id || "?"}-ts:${packet.timestamp || "?"}`;
     if (seenIds.has(dedupKey)) return;
     seenIds.add(dedupKey);
     if (seenIds.size > 5000) {
@@ -476,6 +735,11 @@
     // Always add activity, even if we only know one side
     addActivityEntry(packet, fromLoc, toLoc);
 
+    // Track neighbor relationships from packet communications
+    if (neighborsEnabled) {
+      trackNeighborConnection(fromId, toId, gatewayId, packet);
+    }
+
     if (packet.portnum_name === "TRACEROUTE_APP") {
       // Build a path including source/route/destination
       const routeIds = [];
@@ -500,18 +764,42 @@
             dashArray: "4 8",
             opacity: 0.9,
           });
+          // Track neighbor connection for traceroute hops
+          if (neighborsEnabled) {
+            trackNeighborConnection(lastKnownId, nid, null, packet);
+          }
         }
         lastKnownId = nid;
       }
     } else {
       // Determine best available endpoints for animation
-      const startLoc = fromLoc || gatewayLoc;
-      const endLoc = toLoc || gatewayLoc;
-      const startId = fromLoc?.node_id || fromId || gatewayId;
-      const endId = endLoc?.node_id || toId || gatewayId;
+      // Try to find valid locations for both endpoints
+      let startLoc = fromLoc;
+      let endLoc = toLoc;
+      let startId = fromId;
+      let endId = toId;
 
+      // If we don't have a from location, try using gateway as source
+      if (!startLoc && gatewayLoc && gatewayId != null) {
+        startLoc = gatewayLoc;
+        startId = gatewayId;
+      }
+
+      // If we don't have a to location, try using gateway as destination
+      // But only if it's different from the start
+      if (!endLoc && gatewayLoc && gatewayId != null && gatewayId !== startId) {
+        endLoc = gatewayLoc;
+        endId = gatewayId;
+      }
+
+      // Draw arc if we have two different valid locations
       if (startLoc && endLoc && startId != null && endId != null && startId !== endId) {
-        drawLink(startId, endId, packet);
+        // Ensure we use the node_id from the location object for consistency
+        const finalStartId = startLoc.node_id || startId;
+        const finalEndId = endLoc.node_id || endId;
+        if (finalStartId !== finalEndId) {
+          drawLink(finalStartId, finalEndId, packet);
+        }
       }
       // Broadcast pulse (no to_node_id)
       if (!toId && fromId && fromLoc && markers[fromId]) {
@@ -606,8 +894,37 @@
           updateMarkerStyle(stat.node_id);
         }
       });
+
+      // Load neighbors after node stats
+      loadNeighbors();
     } catch (e) {
       console.error("Failed to load node stats", e);
+    }
+  }
+
+  async function loadNeighbors() {
+    try {
+      const resp = await fetch("/api/neighbors?hours=24&max_distance_km=100");
+      const data = await resp.json();
+      if (data.neighbors) {
+        data.neighbors.forEach(n => {
+          const key = `${n.node1}:${n.node2}`;
+          // Only add if we don't have better live data
+          if (!neighborConnections.has(key)) {
+            neighborConnections.set(key, {
+              lastSeen: n.last_seen * 1000,
+              count: n.count,
+              rssiSum: (n.avg_rssi || -100) * n.count,
+              snrSum: (n.avg_snr || 0) * n.count,
+              rssiCount: n.count,
+              snrCount: n.count
+            });
+          }
+        });
+        updateNeighborLayer();
+      }
+    } catch (e) {
+      console.error("Failed to load neighbors", e);
     }
   }
 
@@ -619,6 +936,10 @@
     if (retryTimer) {
       clearTimeout(retryTimer);
       retryTimer = null;
+    }
+    if (heartbeatTimer) {
+      clearTimeout(heartbeatTimer);
+      heartbeatTimer = null;
     }
   }
 
@@ -632,16 +953,41 @@
     }, retryDelayMs);
   }
 
+  let lastPacketTime = Date.now();
+  let heartbeatTimer = null;
+  const HEARTBEAT_TIMEOUT_MS = 30000; // 30 seconds without packets = reconnect
+
   function startStream() {
     stopStream();
     retryDelayMs = 1000;
+    lastPacketTime = Date.now();
     if (liveStatus) {
       liveStatus.classList.remove("bg-danger", "paused");
       liveStatus.classList.add("bg-success", "pulse");
       liveStatus.textContent = "Live";
     }
     eventSource = new EventSource(`/api/stream/packets?last_id=${lastId}`);
+
+    // Heartbeat timeout detection
+    function checkHeartbeat() {
+      const timeSinceLastPacket = Date.now() - lastPacketTime;
+      if (timeSinceLastPacket > HEARTBEAT_TIMEOUT_MS && !paused) {
+        console.warn("Stream heartbeat timeout - reconnecting");
+        liveStatus.classList.remove("bg-success", "pulse");
+        liveStatus.classList.add("bg-danger");
+        if (liveReconnectHint) {
+          liveReconnectHint.textContent = "Connection stalled - reconnecting…";
+          liveReconnectHint.classList.remove("d-none");
+        }
+        scheduleReconnect();
+      } else if (!paused) {
+        heartbeatTimer = setTimeout(checkHeartbeat, 5000); // Check every 5 seconds
+      }
+    }
+    heartbeatTimer = setTimeout(checkHeartbeat, 5000);
+
     eventSource.onmessage = (evt) => {
+      lastPacketTime = Date.now(); // Update last packet time
       liveStatus.classList.remove("bg-danger");
       liveStatus.classList.add("bg-success", "pulse");
       liveStatus.classList.remove("paused");
@@ -650,20 +996,205 @@
       retryDelayMs = 1000; // reset backoff after a good message
       try {
         const packet = JSON.parse(evt.data);
+
+        // Process the packet to draw arcs and update markers
         handlePacket(packet);
+
+        // Handle text messages
+        if (packet.portnum_name === 'TEXT_MESSAGE_APP') {
+          handleTextMessage(packet);
+        }
+
+        // Handle traceroutes explicitly
+        if (packet.portnum_name === 'TRACEROUTE_APP') {
+          // Already handled in handlePacket, but ensure it's visible
+          // The traceroute path rendering happens in handlePacket
+        }
+
+        // Update stats
+        liveCounter++;
+        liveCounterEl.textContent = liveCounter.toString();
       } catch (e) {
         console.error("Bad packet event", e);
       }
     };
-    eventSource.onerror = () => {
+    eventSource.onerror = (error) => {
+      if (heartbeatTimer) {
+        clearTimeout(heartbeatTimer);
+        heartbeatTimer = null;
+      }
       liveStatus.classList.remove("bg-success", "pulse");
       liveStatus.classList.add("bg-danger");
       if (liveReconnectHint) {
-        liveReconnectHint.textContent = "Reconnecting…";
+        liveReconnectHint.textContent = "Connection error - reconnecting…";
         liveReconnectHint.classList.remove("d-none");
+      }
+      console.warn("SSE stream error, reconnecting:", error);
+      // Close the event source before reconnecting
+      if (eventSource) {
+        try {
+          eventSource.close();
+        } catch (e) {
+          // Ignore errors when closing
+        }
+        eventSource = null;
       }
       scheduleReconnect();
     };
+  }
+
+  async function showNodeDetails(nodeId) {
+    if (!nodeId) return;
+    selectedNodeId = nodeId;
+
+    // Get node details panel element
+    if (!nodeDetailsPanel) {
+      nodeDetailsPanel = document.getElementById("node-details-panel");
+    }
+    if (!nodeDetailsPanel) return;
+
+    // Show loading state
+    nodeDetailsPanel.classList.remove("d-none");
+    nodeDetailsPanel.querySelector(".node-details-content").innerHTML = `
+      <div class="text-center py-4">
+        <div class="spinner-border text-primary" role="status"></div>
+        <p class="mt-2 text-muted small">Loading node details...</p>
+      </div>
+    `;
+
+    try {
+      // Fetch node info from API
+      const response = await fetch(`/api/node/${nodeId}/info`);
+      if (!response.ok) {
+        throw new Error(`Failed to load node info: ${response.status}`);
+      }
+      const data = await response.json();
+      const node = data.node;
+
+      // Get location data if available
+      const loc = nodeLocations.get(nodeId);
+
+      // Format last seen
+      let lastSeenStr = "Unknown";
+      if (node.last_seen) {
+        const lastSeen = new Date(node.last_seen * 1000);
+        lastSeenStr = lastSeen.toLocaleString();
+      } else if (loc?._lastSeenMs) {
+        const lastSeen = new Date(loc._lastSeenMs);
+        lastSeenStr = lastSeen.toLocaleString();
+      }
+
+      // Build node details HTML
+      const displayName = node.long_name || node.short_name || node.display_name || `Node ${nodeId}`;
+      const hexId = node.hex_id || `!${Number(nodeId).toString(16).padStart(8, '0')}`;
+
+      let detailsHTML = `
+        <div class="node-details-header mb-3">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <h6 class="mb-1">${escapeHtml(displayName)}</h6>
+              <div class="small text-muted">${escapeHtml(hexId)}</div>
+            </div>
+            <button class="btn btn-sm btn-link text-white p-0" id="close-node-details" aria-label="Close">
+              <i class="bi bi-x-lg"></i>
+            </button>
+          </div>
+        </div>
+        <div class="node-details-body">
+          <div class="mb-3">
+            <strong class="small text-muted d-block mb-1">Hardware</strong>
+            <div>${escapeHtml(node.hw_model || "Unknown")}</div>
+          </div>
+          ${node.role ? `
+          <div class="mb-3">
+            <strong class="small text-muted d-block mb-1">Role</strong>
+            <div>${escapeHtml(node.role)}</div>
+          </div>
+          ` : ""}
+          ${node.primary_channel ? `
+          <div class="mb-3">
+            <strong class="small text-muted d-block mb-1">Primary Channel</strong>
+            <div>${escapeHtml(node.primary_channel)}</div>
+          </div>
+          ` : ""}
+          <div class="mb-3">
+            <strong class="small text-muted d-block mb-1">Last Seen</strong>
+            <div>${lastSeenStr}</div>
+          </div>
+          ${node.packet_count_24h !== undefined ? `
+          <div class="mb-3">
+            <strong class="small text-muted d-block mb-1">Packets (24h)</strong>
+            <div>${node.packet_count_24h.toLocaleString()}</div>
+          </div>
+          ` : ""}
+          ${loc ? `
+          <div class="mb-3">
+            <strong class="small text-muted d-block mb-1">Location</strong>
+            <div>${loc.latitude?.toFixed(6)}, ${loc.longitude?.toFixed(6)}</div>
+          </div>
+          ` : ""}
+          ${loc?._live ? `
+          ${loc._live.avg_rssi !== undefined ? `
+          <div class="mb-3">
+            <strong class="small text-muted d-block mb-1">Avg RSSI</strong>
+            <div>${loc._live.avg_rssi.toFixed(1)} dBm</div>
+          </div>
+          ` : ""}
+          ${loc._live.avg_snr !== undefined ? `
+          <div class="mb-3">
+            <strong class="small text-muted d-block mb-1">Avg SNR</strong>
+            <div>${loc._live.avg_snr.toFixed(1)} dB</div>
+          </div>
+          ` : ""}
+          ` : ""}
+          <div class="mt-3 pt-3 border-top">
+            <a href="/node/${nodeId}" class="btn btn-sm btn-primary w-100">
+              <i class="bi bi-info-circle me-1"></i> View Full Details
+            </a>
+          </div>
+        </div>
+      `;
+
+      nodeDetailsPanel.querySelector(".node-details-content").innerHTML = detailsHTML;
+
+      // Wire up close button
+      const closeBtn = nodeDetailsPanel.querySelector("#close-node-details");
+      if (closeBtn) {
+        closeBtn.addEventListener("click", closeNodeDetails);
+      }
+
+      // Center map on node if location available
+      if (loc && loc.latitude && loc.longitude) {
+        map.setView([loc.latitude, loc.longitude], Math.max(map.getZoom(), 13));
+      }
+    } catch (error) {
+      console.error("Error loading node details:", error);
+      nodeDetailsPanel.querySelector(".node-details-content").innerHTML = `
+        <div class="text-center py-4 text-danger">
+          <i class="bi bi-exclamation-triangle me-2"></i>
+          <div class="small">Failed to load node details</div>
+          <button class="btn btn-sm btn-outline-secondary mt-2" id="close-node-details">Close</button>
+        </div>
+      `;
+      const closeBtn = nodeDetailsPanel.querySelector("#close-node-details");
+      if (closeBtn) {
+        closeBtn.addEventListener("click", closeNodeDetails);
+      }
+    }
+  }
+
+  function closeNodeDetails() {
+    if (nodeDetailsPanel) {
+      nodeDetailsPanel.classList.add("d-none");
+    }
+    selectedNodeId = null;
+  }
+
+  function escapeHtml(text) {
+    if (text == null) return "";
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
   }
 
   function wireUI() {
@@ -760,6 +1291,19 @@
     toggleCluster?.addEventListener("change", () => {
       clusterEnabled = toggleCluster.checked;
       updateClusterLayer();
+      updateAllNameLabels();
+    });
+
+    const toggleNeighbors = document.getElementById("toggle-neighbors");
+    toggleNeighbors?.addEventListener("change", () => {
+      neighborsEnabled = toggleNeighbors.checked;
+      updateNeighborLayer();
+    });
+
+    const toggleTrails = document.getElementById("toggle-trails");
+    toggleTrails?.addEventListener("change", () => {
+      trailsEnabled = toggleTrails.checked;
+      updateTrailsLayer();
     });
 
     if (timeWindowSelect) {
@@ -865,6 +1409,135 @@
       clusterLayer.clearLayers();
       if (map.hasLayer(clusterLayer)) map.removeLayer(clusterLayer);
       if (markerLayer && !map.hasLayer(markerLayer)) map.addLayer(markerLayer);
+    }
+  }
+
+  function trackNeighborConnection(node1Id, node2Id, gatewayId, packet) {
+    if (!node1Id || !node2Id || node1Id === node2Id) return;
+
+    // Create a consistent key (always smaller:larger)
+    const key = node1Id < node2Id ? `${node1Id}:${node2Id}` : `${node2Id}:${node1Id}`;
+
+    const now = Date.now();
+    const existing = neighborConnections.get(key) || {
+      lastSeen: 0,
+      count: 0,
+      rssiSum: 0,
+      snrSum: 0,
+      rssiCount: 0,
+      snrCount: 0,
+    };
+
+    existing.lastSeen = now;
+    existing.count += 1;
+
+    if (packet.rssi != null) {
+      existing.rssiSum += Number(packet.rssi);
+      existing.rssiCount += 1;
+    }
+    if (packet.snr != null) {
+      existing.snrSum += Number(packet.snr);
+      existing.snrCount += 1;
+    }
+
+    neighborConnections.set(key, existing);
+
+    // Render neighbor connections if enabled
+    if (neighborsEnabled) {
+      renderNeighborConnections();
+    }
+  }
+
+  // Calculate haversine distance between two coordinates (in km)
+  function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  function renderNeighborConnections() {
+    if (!neighborLayer) return;
+
+    // Clear existing neighbor lines
+    neighborLayer.clearLayers();
+
+    const now = Date.now();
+    const maxAge = displayWindowMs; // Use same window as other features
+    const MAX_RF_DISTANCE_KM = 100; // Maximum plausible RF distance in km
+
+    neighborConnections.forEach((conn, key) => {
+      // Skip stale connections
+      if (now - conn.lastSeen > maxAge) return;
+
+      const [node1Id, node2Id] = key.split(':').map(Number);
+      const loc1 = nodeLocations.get(node1Id);
+      const loc2 = nodeLocations.get(node2Id);
+
+      if (!loc1 || !loc2 || !loc1.latitude || !loc2.latitude) return;
+
+      // Filter out unrealistic RF distances (e.g., MQTT server to all of Canada)
+      const distanceKm = calculateDistance(
+        loc1.latitude, loc1.longitude,
+        loc2.latitude, loc2.longitude
+      );
+      if (distanceKm > MAX_RF_DISTANCE_KM) {
+        return; // Skip this connection - too far for realistic RF
+      }
+
+      // Calculate average signal metrics
+      const avgRssi = conn.rssiCount > 0 ? conn.rssiSum / conn.rssiCount : null;
+      const avgSnr = conn.snrCount > 0 ? conn.snrSum / conn.snrCount : null;
+
+      // Get signal quality for styling
+      const signalInfo = getSignalQuality(avgRssi, avgSnr);
+      const color = signalInfo ? signalInfo.color : "#6c757d";
+      const weight = signalInfo ? signalInfo.weight : 2;
+
+      // Determine if direct or multi-hop (based on connection count - more packets = likely direct)
+      // Use dashed line for connections with fewer packets (likely multi-hop)
+      const dashArray = conn.count < 3 ? "8 8" : null;
+
+      const line = L.polyline(
+        [[loc1.latitude, loc1.longitude], [loc2.latitude, loc2.longitude]],
+        {
+          color,
+          weight,
+          opacity: 0.6,
+          dashArray,
+          className: "neighbor-connection",
+        }
+      );
+
+      // Add tooltip with connection info
+      const tooltipText = `Neighbors<br>Packets: ${conn.count}<br>${
+        avgRssi != null ? `Avg RSSI: ${avgRssi.toFixed(1)} dBm<br>` : ""
+      }${avgSnr != null ? `Avg SNR: ${avgSnr.toFixed(1)} dB` : ""}`;
+      line.bindTooltip(tooltipText, {
+        permanent: false,
+        direction: "top",
+        className: "neighbor-tooltip",
+      });
+
+      line.addTo(neighborLayer);
+    });
+  }
+
+  function updateNeighborLayer() {
+    if (neighborsEnabled) {
+      renderNeighborConnections();
+      if (!map.hasLayer(neighborLayer)) {
+        map.addLayer(neighborLayer);
+      }
+    } else {
+      if (map.hasLayer(neighborLayer)) {
+        map.removeLayer(neighborLayer);
+      }
+      neighborLayer.clearLayers();
     }
   }
 })();

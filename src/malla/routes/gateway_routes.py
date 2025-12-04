@@ -3,6 +3,7 @@ Gateway comparison routes for Meshtastic Mesh Health Web UI
 """
 
 import logging
+import time
 from datetime import datetime
 
 from flask import Blueprint, jsonify, render_template, request
@@ -197,4 +198,54 @@ def api_available_gateways():
 
     except Exception as e:
         logger.error(f"Error getting available gateways: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@gateway_bp.route("/api/gateways/status")
+def api_gateway_status():
+    """API endpoint to get MQTT gateway status (online/offline per gateway)."""
+    try:
+        hours = request.args.get("hours", 24, type=int)
+        stats = GatewayService.get_gateway_statistics(hours=hours)
+
+        distribution = stats.get("gateway_distribution", []) or []
+        now_ts = time.time()
+
+        status_list = []
+        for gw in distribution:
+            gateway_id = gw.get("gateway_id")
+            last_seen = gw.get("last_seen")
+            if gateway_id is None or last_seen is None:
+                continue
+
+            age_hours = max(0.0, (now_ts - float(last_seen)) / 3600.0)
+            # Consider gateway online if we've seen traffic within the selected window
+            is_online = age_hours <= hours
+
+            status_list.append(
+                {
+                    "gateway_id": gateway_id,
+                    "packet_count": gw.get("packet_count", 0),
+                    "unique_sources": gw.get("unique_sources", 0),
+                    "last_seen": last_seen,
+                    "last_seen_str": gw.get("last_seen_str"),
+                    "age_hours": round(age_hours, 2),
+                    "online": is_online,
+                }
+            )
+
+        online_count = sum(1 for s in status_list if s["online"])
+        offline_count = len(status_list) - online_count
+
+        return jsonify(
+            {
+                "gateways": status_list,
+                "online": online_count,
+                "offline": offline_count,
+                "hours": hours,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting gateway status: {e}")
         return jsonify({"error": str(e)}), 500

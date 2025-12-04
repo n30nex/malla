@@ -155,8 +155,17 @@ controls_section, stats_section, legend_section, sidebar_styles %}
             <label class="form-check-label" for="tracerouteLinksCheckbox">Traceroute Links</label>
         </div>
         <div class="form-check mt-1">
-            <input class="form-check-input" type="checkbox" id="packetLinksCheckbox">
+            <input class="form-check-input" type="checkbox" id="packetLinksCheckbox" checked>
             <label class="form-check-label" for="packetLinksCheckbox">Packet Links</label>
+        </div>
+    </div>
+
+    <!-- Map Layers -->
+    <div class="sidebar-section">
+        <h6><i class="bi bi-layers"></i> Map Layers</h6>
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="heatmapCheckbox">
+            <label class="form-check-label" for="heatmapCheckbox">Signal Heatmap</label>
         </div>
     </div>
 
@@ -448,6 +457,7 @@ controls_section, stats_section, legend_section, sidebar_styles %}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <!-- Leaflet MarkerCluster JS -->
 <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <script src="{{ url_for('static', filename='js/time-range-presets.js') }}"></script>
 
 <script>
@@ -478,15 +488,18 @@ controls_section, stats_section, legend_section, sidebar_styles %}
     let allNodeData = [];
     let allTracerouteLinks = [];
     let allPacketLinks = [];
+    let allLinkData = []; // Combined traceroute and packet links
     let selectedNodeId = null;
     let showTracerouteLinks = true;
-    let showPacketLinks = false;
+    let showPacketLinks = true;
     let precisionCircle = null;
     let searchResults = [];
     let allNodes = [];
     let linkData = [];
     let firstDisplay = true; // prevent recenter after initial load
     let currentHopDepth = 1; // max hop depth to display around selected node
+    let heatmapLayer = null;
+    let showHeatmap = false;
 
     // Update map theme based on current theme setting
     function updateMapTheme() {
@@ -626,6 +639,12 @@ controls_section, stats_section, legend_section, sidebar_styles %}
             }
         });
 
+        // Heatmap checkbox handler
+        $('#heatmapCheckbox').on('change', function () {
+            showHeatmap = this.checked;
+            toggleHeatmap();
+        });
+
         // Hop depth selector change handler
         $('#hopDepthSelect').on('change', function () {
             currentHopDepth = parseInt(this.value, 10);
@@ -760,6 +779,72 @@ controls_section, stats_section, legend_section, sidebar_styles %}
         loadNodeLocations();
     }
 
+    function toggleHeatmap() {
+        if (showHeatmap) {
+            if (heatmapLayer) {
+                map.addLayer(heatmapLayer);
+            } else {
+                updateHeatmapLayer();
+            }
+        } else {
+            if (heatmapLayer) {
+                map.removeLayer(heatmapLayer);
+            }
+        }
+    }
+
+    function updateHeatmapLayer() {
+        if (!allNodeData || allNodeData.length === 0) return;
+
+        // Prepare heatmap data: [lat, lng, intensity]
+        // We'll use RSSI or SNR to determine intensity.
+        // RSSI usually ranges from -120 (weak) to -60 (strong).
+        // SNR usually ranges from -10 (weak) to 20 (strong).
+        // We map this to 0.0 - 1.0 range.
+
+        const heatPoints = allNodeData
+            .filter(node => node.latitude && node.longitude && (node.avg_rssi !== null && node.avg_rssi !== undefined || node.avg_snr !== null && node.avg_snr !== undefined))
+            .map(node => {
+                let intensity = 0.5; // Default medium intensity
+
+                // Prefer RSSI if available, fall back to SNR
+                if (node.avg_rssi !== null && node.avg_rssi !== undefined) {
+                    // Normalize RSSI: -120 -> 0.1, -60 -> 1.0
+                    intensity = (node.avg_rssi + 130) / 70;
+                } else if (node.avg_snr !== null && node.avg_snr !== undefined) {
+                    // Normalize SNR: -10 -> 0.1, 20 -> 1.0
+                    intensity = (node.avg_snr + 10) / 30;
+                }
+
+                intensity = Math.max(0.1, Math.min(1.0, intensity));
+                return [node.latitude, node.longitude, intensity];
+            });
+
+        if (heatmapLayer) {
+            map.removeLayer(heatmapLayer);
+        }
+
+        if (heatPoints.length > 0) {
+            heatmapLayer = L.heatLayer(heatPoints, {
+                radius: 25,
+                blur: 15,
+                maxZoom: 10,
+                max: 1.0,
+                gradient: {
+                    0.4: 'blue',
+                    0.6: 'cyan',
+                    0.7: 'lime',
+                    0.8: 'yellow',
+                    1.0: 'red'
+                }
+            });
+
+            if (showHeatmap) {
+                heatmapLayer.addTo(map);
+            }
+        }
+    }
+
     // Build filter parameters from form
     function buildFilterParams() {
         const form = document.getElementById('locationFilterForm');
@@ -797,6 +882,11 @@ controls_section, stats_section, legend_section, sidebar_styles %}
 
             // Apply client-side filters
             applyClientSideFilters();
+
+            // Update heatmap data if enabled
+            if (showHeatmap) {
+                updateHeatmapLayer();
+            }
 
             hideLoading();
 
@@ -892,6 +982,11 @@ controls_section, stats_section, legend_section, sidebar_styles %}
 
         // Update the map display
         updateMapDisplay();
+
+        // Update heatmap if enabled
+        if (showHeatmap) {
+            updateHeatmapLayer();
+        }
     }
 
     // Update map display with filtered data
@@ -900,7 +995,9 @@ controls_section, stats_section, legend_section, sidebar_styles %}
         updateStats();
 
         // Clear existing markers
-        markerClusterGroup.clearLayers();
+        if (markerClusterGroup) {
+            markerClusterGroup.clearLayers();
+        }
         nodeMarkers = [];
 
         // Add markers for each filtered node
@@ -1757,7 +1854,9 @@ controls_section, stats_section, legend_section, sidebar_styles %}
         nodeData = originalNodeData.filter(n => visibleNodesSet.has(n.node_id));
 
         // Re-render markers and links
-        markerClusterGroup.clearLayers();
+        if (markerClusterGroup) {
+            markerClusterGroup.clearLayers();
+        }
         nodeMarkers = [];
 
         // Clear existing links

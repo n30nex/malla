@@ -5,6 +5,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-meshtastic_history}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    command: postgres -c max_connections=2000
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -44,7 +45,7 @@ services:
       - MALLA_DATABASE_NAME=${POSTGRES_DB:-meshtastic_history}
       - MALLA_DATABASE_USER=${POSTGRES_USER:-postgres}
       - MALLA_DATABASE_PASSWORD=${POSTGRES_PASSWORD:-postgres}
-      - MALLA_DB_POOL_MAX=100
+      - MALLA_DB_POOL_MAX=500
       - MALLA_NAME=${MALLA_NAME:-Malla}
       - MALLA_SECRET_KEY=${MALLA_SECRET_KEY:-dev-secret-key-change-in-production}
       - MALLA_DEBUG=${MALLA_DEBUG:-false}
@@ -83,7 +84,7 @@ services:
       - MALLA_DATABASE_NAME=${POSTGRES_DB:-meshtastic_history}
       - MALLA_DATABASE_USER=${POSTGRES_USER:-postgres}
       - MALLA_DATABASE_PASSWORD=${POSTGRES_PASSWORD:-postgres}
-      - MALLA_DB_POOL_MAX=100
+      - MALLA_DB_POOL_MAX=500
       # MQTT Configuration - set these in your .env file
       - MALLA_MQTT_BROKER_ADDRESS=${MALLA_MQTT_BROKER_ADDRESS}
       - MALLA_MQTT_PORT=${MALLA_MQTT_PORT:-1883}
@@ -93,8 +94,10 @@ services:
       - MALLA_MQTT_TOPIC_SUFFIX=${MALLA_MQTT_TOPIC_SUFFIX:-/+/+/+/#}
       - MALLA_DEFAULT_CHANNEL_KEY=${MALLA_DEFAULT_CHANNEL_KEY:-}
       - MALLA_IGNORED_NODE_IDS=${MALLA_IGNORED_NODE_IDS:-}
+      - MALLA_IGNORE_MALFORMED_PACKETS=${MALLA_IGNORE_MALFORMED_PACKETS:-true}
       - MALLA_METRICS_ENABLED=${MALLA_METRICS_ENABLED:-true}
       - MALLA_METRICS_PORT=9100
+      - MALLA_DATA_RETENTION_HOURS=${MALLA_DATA_RETENTION_HOURS:-24}
     volumes:
       - malla_data:/app/data
       # Optional: mount your own config file (uncomment if you have one)

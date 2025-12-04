@@ -9,8 +9,6 @@ from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
-from ..database.repositories import NodeRepository
-
 logger = logging.getLogger(__name__)
 
 # NOTE: Lightweight, in-process cache so that repeated calls in a short period
@@ -33,10 +31,17 @@ class AnalyticsService:
         gateway_id: str | None = None,
         from_node: int | None = None,
         hop_count: int | None = None,
+        hours: int = 24,
     ) -> dict[str, Any]:
         """Get comprehensive analytics data for the dashboard with simple in-memory caching."""
 
-        cache_key = (gateway_id, from_node, hop_count)
+        # Normalize hours to a sane range (1 hour to 7 days)
+        if hours < 1:
+            hours = 1
+        if hours > 24 * 7:
+            hours = 24 * 7
+
+        cache_key = (gateway_id, from_node, hop_count, hours)
         now_ts = time.time()
 
         # Return cached value if still valid
@@ -61,27 +66,27 @@ class AnalyticsService:
             if hop_count is not None:
                 filters["hop_count"] = hop_count
 
-            twenty_four_hours_ago = now_ts - 24 * 3600
+            since_timestamp = now_ts - hours * 3600
             seven_days_ago = now_ts - 7 * 24 * 3600
 
             packet_stats = AnalyticsService._get_packet_statistics(
-                filters, twenty_four_hours_ago
+                filters, since_timestamp
             )
             node_stats = AnalyticsService._get_node_activity_statistics(
-                filters, twenty_four_hours_ago
+                filters, since_timestamp
             )
             signal_stats = AnalyticsService._get_signal_quality_statistics(
-                filters, twenty_four_hours_ago
+                filters, since_timestamp
             )
             temporal_stats = AnalyticsService._get_temporal_patterns(
-                filters, twenty_four_hours_ago
+                filters, since_timestamp
             )
             top_nodes = AnalyticsService._get_top_active_nodes(filters, seven_days_ago)
             packet_types = AnalyticsService._get_packet_type_distribution(
-                filters, twenty_four_hours_ago
+                filters, since_timestamp
             )
             gateway_stats = AnalyticsService._get_gateway_distribution(
-                filters, twenty_four_hours_ago
+                filters, since_timestamp
             )
 
             result = {
@@ -451,7 +456,10 @@ class AnalyticsService:
         conn = None
         cursor = None
         try:
-            where_conditions: list[str] = ["ph.timestamp >= %s", "ph.from_node_id IS NOT NULL"]
+            where_conditions: list[str] = [
+                "ph.timestamp >= %s",
+                "ph.from_node_id IS NOT NULL",
+            ]
             params: list[Any] = [since_timestamp]
 
             if filters.get("gateway_id"):
@@ -514,6 +522,586 @@ class AnalyticsService:
             )
 
         return top_nodes
+
+    @staticmethod
+    def _get_node_rankings(
+        filters: dict, since_timestamp: float, order: str = "DESC", limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """Get ranked nodes by packet count (hottest or coldest)."""
+        from ..database.connection import get_db_connection, put_db_connection
+
+        conn = None
+        cursor = None
+        try:
+            where_conditions: list[str] = [
+                "ph.timestamp >= %s",
+                "ph.from_node_id IS NOT NULL",
+            ]
+            params: list[Any] = [since_timestamp]
+
+            if filters.get("gateway_id"):
+                where_conditions.append("ph.gateway_id = %s")
+                params.append(filters["gateway_id"])
+
+            where_clause = " AND ".join(where_conditions)
+
+            # For "coldest", we still want active nodes (count > 0), just the ones with fewest packets
+            query = f"""
+                SELECT
+                    ph.from_node_id AS node_id,
+                    MAX(ni.long_name) AS long_name,
+                    MAX(ni.short_name) AS short_name,
+                    MAX(ni.hw_model) AS hw_model,
+                    COUNT(*) AS packet_count,
+                    AVG(CAST(ph.rssi AS FLOAT)) AS avg_rssi,
+                    AVG(CAST(ph.snr AS FLOAT)) AS avg_snr,
+                    MAX(ph.timestamp) AS last_seen
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE {where_clause}
+                GROUP BY ph.from_node_id
+                HAVING COUNT(*) > 0
+                ORDER BY packet_count {order}
+                LIMIT %s
+            """
+
+            params.append(limit)
+
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute(query, params)
+            rows = cursor.fetchall() or []
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        ranked_nodes: list[dict[str, Any]] = []
+        for row in rows:
+            node_id = row.get("node_id")
+            display_name = row.get("long_name") or row.get("short_name")
+            if not display_name and node_id is not None:
+                display_name = f"!{node_id:08x}"
+            ranked_nodes.append(
+                {
+                    "node_id": node_id,
+                    "display_name": display_name,
+                    "packet_count": row.get("packet_count", 0) or 0,
+                    "avg_rssi": row.get("avg_rssi"),
+                    "avg_snr": row.get("avg_snr"),
+                    "last_seen": row.get("last_seen"),
+                    "hw_model": row.get("hw_model"),
+                }
+            )
+
+        return ranked_nodes
+
+    @staticmethod
+    def _get_node_temperature_rankings(
+        filters: dict, since_timestamp: float, order: str = "DESC", limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """Get ranked nodes by temperature telemetry (hottest or coldest).
+
+        Preference order:
+        1. Use node_telemetry_latest if it has any recent rows.
+        2. Fallback to decoding TELEMETRY_APP packets from packet_history.
+        """
+        from ..database.connection import get_db_connection, put_db_connection
+
+        conn = None
+        cursor = None
+        ranked_nodes: list[dict[str, Any]] = []
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            # First try node_telemetry_latest for recent data
+            # Convert Unix timestamp to PostgreSQL timestamp for comparison
+            where_clauses: list[str] = ["ntl.last_updated >= to_timestamp(%s)"]
+            params: list[Any] = [since_timestamp]
+
+            if filters.get("gateway_id"):
+                # Join packet_history to infer gateway for latest samples
+                where_clauses.append(
+                    "EXISTS (SELECT 1 FROM packet_history ph "
+                    "WHERE ph.from_node_id = ntl.node_id "
+                    "AND ph.gateway_id = %s "
+                    "AND ph.timestamp >= %s)"
+                )
+                params.extend([filters["gateway_id"], since_timestamp])
+
+            where_sql = " AND ".join(where_clauses)
+
+            cursor.execute(
+                f"""
+                SELECT
+                    ntl.node_id,
+                    ntl.temperature,
+                    ntl.last_updated,
+                    ni.long_name,
+                    ni.short_name,
+                    ni.hw_model
+                FROM node_telemetry_latest ntl
+                LEFT JOIN node_info ni ON ntl.node_id = ni.node_id
+                WHERE {where_sql} AND ntl.temperature IS NOT NULL
+                ORDER BY ntl.temperature {"DESC" if order == "DESC" else "ASC"}
+                LIMIT %s
+                """,
+                (*params, limit),
+            )
+            rows = cursor.fetchall() or []
+
+            if rows:
+                for row in rows:
+                    node_id = row.get("node_id")
+                    if node_id is None:
+                        continue
+                    display_name = row.get("long_name") or row.get("short_name")
+                    if not display_name:
+                        display_name = f"!{node_id:08x}"
+                    ranked_nodes.append(
+                        {
+                            "node_id": node_id,
+                            "display_name": display_name,
+                            "temperature": round(row.get("temperature") or 0.0, 1),
+                            "temperature_count": 1,
+                            "hw_model": row.get("hw_model"),
+                        }
+                    )
+                return ranked_nodes
+
+            # Fallback: decode telemetry from packet_history as before
+            try:
+                from meshtastic import telemetry_pb2
+            except ImportError:
+                logger.warning(
+                    "meshtastic protobuf not available, cannot decode telemetry"
+                )
+                return []
+
+            where_conditions: list[str] = [
+                "ph.timestamp >= %s",
+                "ph.from_node_id IS NOT NULL",
+                "ph.portnum_name = 'TELEMETRY_APP'",
+                "ph.raw_payload IS NOT NULL",
+            ]
+            params = [since_timestamp]
+
+            if filters.get("gateway_id"):
+                where_conditions.append("ph.gateway_id = %s")
+                params.append(filters["gateway_id"])
+
+            where_clause = " AND ".join(where_conditions)
+
+            query = f"""
+                SELECT
+                    ph.from_node_id AS node_id,
+                    ph.raw_payload,
+                    ph.timestamp,
+                    MAX(ni.long_name) AS long_name,
+                    MAX(ni.short_name) AS short_name,
+                    MAX(ni.hw_model) AS hw_model
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE {where_clause}
+                GROUP BY ph.from_node_id, ph.raw_payload, ph.timestamp
+                ORDER BY ph.timestamp DESC
+            """
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall() or []
+
+            logger.info(f"Temperature rankings: Fetched {len(rows)} telemetry packets")
+
+            node_temperatures: dict[int, list[float]] = {}
+            node_info: dict[int, dict[str, Any]] = {}
+            decode_success_count = 0
+            decode_fail_count = 0
+            temperature_found_count = 0
+
+            for row in rows:
+                node_id = row.get("node_id")
+                if not node_id:
+                    continue
+
+                if node_id not in node_info:
+                    node_info[node_id] = {
+                        "long_name": row.get("long_name"),
+                        "short_name": row.get("short_name"),
+                        "hw_model": row.get("hw_model"),
+                    }
+
+                raw_payload = row.get("raw_payload")
+                if not raw_payload:
+                    continue
+
+                try:
+                    # Convert memoryview to bytes if needed
+                    if isinstance(raw_payload, memoryview):
+                        raw_payload = bytes(raw_payload)
+                    elif not isinstance(raw_payload, bytes):
+                        continue
+
+                    telemetry = telemetry_pb2.Telemetry()
+                    telemetry.ParseFromString(raw_payload)
+                    decode_success_count += 1
+
+                    if telemetry.HasField("environment_metrics"):
+                        env_metrics = telemetry.environment_metrics
+                        if env_metrics.HasField("temperature"):
+                            temp = env_metrics.temperature
+                            temperature_found_count += 1
+                            node_temperatures.setdefault(node_id, []).append(temp)
+                except Exception as e:
+                    decode_fail_count += 1
+                    logger.debug(f"Failed to decode telemetry for node {node_id}: {e}")
+                    continue
+
+            logger.info(
+                f"Temperature rankings: Decoded {decode_success_count}/{len(rows)} packets, "
+                f"found {temperature_found_count} with temperature data, "
+                f"{decode_fail_count} decode failures, "
+                f"{len(node_temperatures)} nodes with temperature"
+            )
+
+            node_avg_temps: list[tuple[int, float]] = []
+            for node_id, temps in node_temperatures.items():
+                if temps:
+                    avg_temp = sum(temps) / len(temps)
+                    node_avg_temps.append((node_id, avg_temp))
+
+            node_avg_temps.sort(key=lambda x: x[1], reverse=(order == "DESC"))
+
+            for node_id, avg_temp in node_avg_temps[:limit]:
+                info = node_info.get(node_id, {})
+                display_name = info.get("long_name") or info.get("short_name")
+                if not display_name and node_id is not None:
+                    display_name = f"!{node_id:08x}"
+
+                ranked_nodes.append(
+                    {
+                        "node_id": node_id,
+                        "display_name": display_name,
+                        "temperature": round(avg_temp, 1),
+                        "temperature_count": len(node_temperatures[node_id]),
+                        "hw_model": info.get("hw_model"),
+                    }
+                )
+
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        return ranked_nodes
+
+    @staticmethod
+    def _get_node_telemetry_rankings(
+        filters: dict,
+        since_timestamp: float,
+        metric_type: str,
+        order: str = "DESC",
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Get ranked nodes by telemetry metric (battery, humidity, voltage).
+
+        Preference order:
+        1. Use node_telemetry_latest if it has any recent rows for the metric.
+        2. Fallback to decoding TELEMETRY_APP packets from packet_history.
+        """
+        from ..database.connection import get_db_connection, put_db_connection
+
+        conn = None
+        cursor = None
+        ranked_nodes: list[dict[str, Any]] = []
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            # Map metric_type to column in node_telemetry_latest
+            metric_column_map = {
+                "battery": "battery_level",
+                "humidity": "humidity",
+                "voltage": "voltage",
+            }
+            column = metric_column_map.get(metric_type)
+
+            if column:
+                where_clauses: list[str] = [
+                    "ntl.last_updated >= to_timestamp(%s)",
+                    f"ntl.{column} IS NOT NULL",
+                ]
+                params: list[Any] = [since_timestamp]
+
+                if filters.get("gateway_id"):
+                    where_clauses.append(
+                        "EXISTS (SELECT 1 FROM packet_history ph "
+                        "WHERE ph.from_node_id = ntl.node_id "
+                        "AND ph.gateway_id = %s "
+                        "AND ph.timestamp >= %s)"
+                    )
+                    params.extend([filters["gateway_id"], since_timestamp])
+
+                where_sql = " AND ".join(where_clauses)
+
+                cursor.execute(
+                    f"""
+                    SELECT
+                        ntl.node_id,
+                        ntl.{column} AS metric_value,
+                        ntl.last_updated,
+                        ni.long_name,
+                        ni.short_name,
+                        ni.hw_model
+                    FROM node_telemetry_latest ntl
+                    LEFT JOIN node_info ni ON ntl.node_id = ni.node_id
+                    WHERE {where_sql}
+                    ORDER BY ntl.{column} {"DESC" if order == "DESC" else "ASC"}
+                    LIMIT %s
+                    """,
+                    (*params, limit),
+                )
+                rows = cursor.fetchall() or []
+
+                if rows:
+                    for row in rows:
+                        node_id = row.get("node_id")
+                        if node_id is None:
+                            continue
+                        display_name = row.get("long_name") or row.get("short_name")
+                        if not display_name:
+                            display_name = f"!{node_id:08x}"
+
+                        value = row.get("metric_value")
+                        if value is None:
+                            continue
+
+                        rounded = (
+                            round(float(value), 2)
+                            if metric_type == "voltage"
+                            else round(float(value), 1)
+                        )
+
+                        ranked_nodes.append(
+                            {
+                                "node_id": node_id,
+                                "display_name": display_name,
+                                "metric_value": rounded,
+                                "metric_count": 1,
+                                "hw_model": row.get("hw_model"),
+                            }
+                        )
+
+                    return ranked_nodes
+
+            # Fallback: decode telemetry from packet_history
+            try:
+                from meshtastic import telemetry_pb2
+            except ImportError:
+                logger.warning(
+                    "meshtastic protobuf not available, cannot decode telemetry"
+                )
+                return []
+
+            where_conditions: list[str] = [
+                "ph.timestamp >= %s",
+                "ph.from_node_id IS NOT NULL",
+                "ph.portnum_name = 'TELEMETRY_APP'",
+                "ph.raw_payload IS NOT NULL",
+            ]
+            params = [since_timestamp]
+
+            if filters.get("gateway_id"):
+                where_conditions.append("ph.gateway_id = %s")
+                params.append(filters["gateway_id"])
+
+            where_clause = " AND ".join(where_conditions)
+
+            query = f"""
+                SELECT
+                    ph.from_node_id AS node_id,
+                    ph.raw_payload,
+                    ph.timestamp,
+                    ni.long_name,
+                    ni.short_name,
+                    ni.hw_model
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE {where_clause}
+                ORDER BY ph.timestamp DESC
+            """
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall() or []
+
+            node_metrics: dict[int, list[float]] = {}
+            node_info: dict[int, dict[str, Any]] = {}
+
+            for row in rows:
+                node_id = row.get("node_id")
+                if not node_id:
+                    continue
+
+                if node_id not in node_info:
+                    node_info[node_id] = {
+                        "long_name": row.get("long_name"),
+                        "short_name": row.get("short_name"),
+                        "hw_model": row.get("hw_model"),
+                    }
+
+                raw_payload = row.get("raw_payload")
+                if not raw_payload:
+                    continue
+
+                try:
+                    telemetry = telemetry_pb2.Telemetry()
+                    if isinstance(raw_payload, bytes):
+                        telemetry.ParseFromString(raw_payload)
+                    elif isinstance(raw_payload, memoryview):
+                        telemetry.ParseFromString(bytes(raw_payload))
+                    else:
+                        continue
+
+                    metric_value = None
+                    if metric_type == "battery" and telemetry.HasField(
+                        "device_metrics"
+                    ):
+                        device_metrics = telemetry.device_metrics
+                        if device_metrics.HasField("battery_level"):
+                            metric_value = device_metrics.battery_level
+                    elif metric_type == "voltage" and telemetry.HasField(
+                        "device_metrics"
+                    ):
+                        device_metrics = telemetry.device_metrics
+                        if device_metrics.HasField("voltage"):
+                            metric_value = device_metrics.voltage / 1000.0
+                    elif metric_type == "humidity" and telemetry.HasField(
+                        "environment_metrics"
+                    ):
+                        env_metrics = telemetry.environment_metrics
+                        if env_metrics.HasField("relative_humidity"):
+                            metric_value = env_metrics.relative_humidity
+
+                    if metric_value is not None:
+                        node_metrics.setdefault(node_id, []).append(float(metric_value))
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to decode telemetry for node {node_id} (type={metric_type}): {e}"
+                    )
+                    continue
+
+            node_avg_metrics: list[tuple[int, float]] = []
+
+            for node_id, values in node_metrics.items():
+                if values:
+                    avg_value = sum(values) / len(values)
+                    node_avg_metrics.append((node_id, avg_value))
+
+            node_avg_metrics.sort(key=lambda x: x[1], reverse=(order == "DESC"))
+
+            for node_id, avg_value in node_avg_metrics[:limit]:
+                info = node_info.get(node_id, {})
+                display_name = info.get("long_name") or info.get("short_name")
+                if not display_name and node_id is not None:
+                    display_name = f"!{node_id:08x}"
+
+                ranked_nodes.append(
+                    {
+                        "node_id": node_id,
+                        "display_name": display_name,
+                        "metric_value": round(avg_value, 2)
+                        if metric_type == "voltage"
+                        else round(avg_value, 1),
+                        "metric_count": len(node_metrics[node_id]),
+                        "hw_model": info.get("hw_model"),
+                    }
+                )
+
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        return ranked_nodes
+
+    @staticmethod
+    def _get_channel_utilization(
+        filters: dict, since_timestamp: float
+    ) -> dict[str, Any]:
+        """Get channel utilization metrics (bytes/packets per hour)."""
+        from ..database.connection import get_db_connection, put_db_connection
+
+        where_conditions: list[str] = ["timestamp >= %s"]
+        params: list[Any] = [since_timestamp]
+
+        if filters.get("gateway_id"):
+            where_conditions.append("gateway_id = %s")
+            params.append(filters["gateway_id"])
+
+        where_clause = " AND ".join(where_conditions)
+
+        query = f"""
+            SELECT
+                to_char(to_timestamp(timestamp), 'HH24') AS hour,
+                COUNT(*) AS packet_count,
+                SUM(COALESCE(payload_length, 0)) AS total_bytes
+            FROM packet_history
+            WHERE {where_clause}
+            GROUP BY hour
+            ORDER BY hour
+        """
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        utilization_data = []
+        for row in rows:
+            utilization_data.append(
+                {
+                    "hour": int(row["hour"]),
+                    "packet_count": row["packet_count"],
+                    "total_bytes": row["total_bytes"] or 0,
+                }
+            )
+
+        return {"hourly_utilization": utilization_data}
 
     @staticmethod
     def _get_packet_type_distribution(

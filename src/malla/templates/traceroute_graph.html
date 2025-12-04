@@ -155,8 +155,12 @@
     right: 0;
     bottom: 0;
     display: flex;
-    background: var(--bs-body-bg);
+    background: linear-gradient(135deg, var(--bs-body-bg) 0%, var(--bs-tertiary-bg) 100%);
     z-index: 1;
+}
+
+[data-bs-theme=dark] .graph-container {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
 }
 
 .graph-main {
@@ -206,18 +210,34 @@
 }
 
 .node.selected circle {
-    stroke: #007bff;
-    stroke-width: 4;
+    stroke: #3b82f6;
+    stroke-width: 5;
+    filter: drop-shadow(0 0 20px rgba(59, 130, 246, 0.8)) !important;
+    animation: selectedPulse 2s ease-in-out infinite;
+}
+
+@keyframes selectedPulse {
+    0%, 100% {
+        stroke-width: 5;
+        filter: drop-shadow(0 0 20px rgba(59, 130, 246, 0.8));
+    }
+    50% {
+        stroke-width: 6;
+        filter: drop-shadow(0 0 30px rgba(59, 130, 246, 1));
+    }
 }
 
 .node.comparison circle {
-    stroke: #28a745;
-    stroke-width: 4;
+    stroke: #10b981;
+    stroke-width: 5;
+    filter: drop-shadow(0 0 20px rgba(16, 185, 129, 0.8)) !important;
 }
 
 .link.selected {
-    stroke: #007bff !important;
-    stroke-width: 4 !important;
+    stroke: #3b82f6 !important;
+    stroke-width: 6 !important;
+    stroke-opacity: 1 !important;
+    filter: drop-shadow(0 4px 12px rgba(59, 130, 246, 0.6)) !important;
 }
 
 /* Additional mobile adjustments specific to graph */
@@ -391,9 +411,15 @@ function loadGraph() {
     });
 
     fetch(`/api/traceroute/graph?${params.toString()}`)
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
+        })
         .then(data => {
             if (data.error) {
+                hideLoading();
                 showError(data.error);
                 return;
             }
@@ -424,7 +450,8 @@ function loadGraph() {
         })
         .catch(error => {
             console.error('Error loading graph:', error);
-            showError('Failed to load graph data');
+            hideLoading();
+            showError('Failed to load graph data: ' + (error.message || 'Unknown error'));
         });
 }
 
@@ -435,8 +462,16 @@ function renderGraph(data) {
         const container = d3.select('#networkGraph');
         container.selectAll('*').remove(); // Clear previous graph
 
+        // Check if data is valid
+        if (!data) {
+            console.error('No data received');
+            showError('No data received from server');
+            return;
+        }
+
         if (!data.nodes || data.nodes.length === 0) {
             console.log('No nodes found in data');
+            hideLoading();
             container.append('div')
                 .attr('class', 'loading-overlay')
                 .html('<i class="bi bi-diagram-3"></i><br>No network data found for the selected criteria');

@@ -66,8 +66,19 @@ def get_db_connection() -> Any:
             # Initialize connection pool if not already done
             if _connection_pool is None:
                 minconn = int(os.getenv("MALLA_DB_POOL_MIN", "1"))
-                maxconn = int(os.getenv("MALLA_DB_POOL_MAX", "50"))
+                maxconn = int(os.getenv("MALLA_DB_POOL_MAX", "80"))
                 maxconn = max(maxconn, minconn + 1)
+                logger.info(
+                    f"Initializing connection pool: min={minconn}, max={maxconn}"
+                )
+
+                # Log warning if pool size is very large (might hit PostgreSQL limits)
+                if maxconn > 100:
+                    recommended = maxconn + 20
+                    logger.warning(
+                        f"Connection pool size ({maxconn}) is large. "
+                        f"Ensure PostgreSQL max_connections is set appropriately (recommended: {recommended})"
+                    )
 
                 if isinstance(conn_params, str):
                     _connection_pool = ThreadedConnectionPool(
@@ -92,8 +103,12 @@ def get_db_connection() -> Any:
                 time.sleep(retry_delay)
                 retry_delay *= 2  # Exponential backoff
             else:
-                logger.error(f"Failed to connect to database after {max_retries} attempts: {e}")
-                raise DatabaseConnectionError(f"Failed to connect to database: {e}") from e
+                logger.error(
+                    f"Failed to connect to database after {max_retries} attempts: {e}"
+                )
+                raise DatabaseConnectionError(
+                    f"Failed to connect to database: {e}"
+                ) from e
         except Exception as e:
             logger.error(f"Unexpected error connecting to database: {e}")
             raise DatabaseError(f"Database error: {e}") from e
@@ -107,16 +122,29 @@ def put_db_connection(conn: Any) -> None:
 
     if _connection_pool:
         try:
+            # Check if connection is still valid before returning to pool
+            if hasattr(conn, "closed") and conn.closed:
+                logger.debug("Connection already closed, not returning to pool")
+                return
+
             try:
                 # Ensure no open transaction is left behind
                 conn.rollback()
             except Exception:
-                pass
+                # Connection might be in a bad state, close it instead
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                return
+
+            # Return connection to pool - ThreadedConnectionPool handles keying automatically
             _connection_pool.putconn(conn)
         except Exception as e:
             logger.warning(f"Error returning connection to pool: {e}")
             try:
-                conn.close()
+                if hasattr(conn, "close"):
+                    conn.close()
             except Exception:
                 pass
 
@@ -232,6 +260,8 @@ def _ensure_schema_migrations(cursor: Any) -> None:
         "primary_channel": _migration_primary_channel,
         "bigint_node_ids": _migration_bigint_ids,
         "packet_indexes": _migration_packet_indexes,
+        "cached_longest_links": _migration_cached_longest_links,
+        "node_telemetry_latest": _migration_node_telemetry_latest,
     }
 
     for name, func in migrations.items():
@@ -366,3 +396,49 @@ def _migration_packet_indexes(cursor: Any) -> None:
                 )
                 continue
             raise
+
+
+def _migration_cached_longest_links(cursor: Any) -> None:
+    """Ensure cached_longest_links table exists (performance optimization)."""
+    # Keep this in sync with src/malla/database/migrations/add_cached_longest_links.sql
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cached_longest_links (
+            id SERIAL PRIMARY KEY,
+            data JSONB NOT NULL,
+            calculated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            parameters JSONB NOT NULL,
+            CONSTRAINT unique_parameters UNIQUE (parameters)
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_cached_longest_links_time
+        ON cached_longest_links(calculated_at DESC)
+        """
+    )
+
+
+def _migration_node_telemetry_latest(cursor: Any) -> None:
+    """Ensure node_telemetry_latest table exists for fast telemetry lookups."""
+    # Keep this in sync with src/malla/database/migrations/add_node_telemetry_latest.sql
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS node_telemetry_latest (
+            node_id BIGINT PRIMARY KEY,
+            temperature FLOAT,
+            humidity FLOAT,
+            pressure FLOAT,
+            battery_level INTEGER,
+            voltage FLOAT,
+            last_updated TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_node_telemetry_latest_updated
+        ON node_telemetry_latest(last_updated DESC)
+        """
+    )

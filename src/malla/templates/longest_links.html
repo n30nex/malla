@@ -272,7 +272,7 @@
 
     function setupEventListeners() {
         document.getElementById('refresh-btn').addEventListener('click', loadLongestLinks);
-        
+
         // Refresh when filters change
         document.getElementById('min-distance').addEventListener('change', debounce(loadLongestLinks, 500));
         document.getElementById('min-snr').addEventListener('change', debounce(loadLongestLinks, 500));
@@ -308,8 +308,16 @@
         });
 
         fetch(`/api/longest-links?${params}`)
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
             .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
                 currentData = data;
                 displayResults(data);
                 document.getElementById('loading').style.display = 'none';
@@ -317,7 +325,11 @@
             .catch(error => {
                 console.error('Error loading longest links:', error);
                 document.getElementById('loading').style.display = 'none';
-                alert('Error loading data: ' + error.message);
+                const errorMsg = error.message || 'Unknown error';
+                alert('Error loading data: ' + errorMsg);
+                // Show empty state
+                document.getElementById('direct-no-data').style.display = 'block';
+                document.getElementById('indirect-no-data').style.display = 'block';
             });
     }
 
@@ -327,20 +339,40 @@
     }
 
     function displayResults(data) {
+        // Ensure data structure exists
+        if (!data) {
+            console.error('No data received');
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('direct-no-data').style.display = 'block';
+            document.getElementById('indirect-no-data').style.display = 'block';
+            return;
+        }
+
+        // Ensure required fields exist
+        if (!data.summary) {
+            data.summary = { total_links: 0, direct_links: 0, longest_direct: 'N/A', longest_path: 'N/A' };
+        }
+        if (!data.direct_links) {
+            data.direct_links = [];
+        }
+        if (!data.indirect_links) {
+            data.indirect_links = [];
+        }
+
         // Update summary cards
-        document.getElementById('total-links').textContent = data.summary.total_links;
-        document.getElementById('direct-links').textContent = data.summary.direct_links;
+        document.getElementById('total-links').textContent = data.summary.total_links || 0;
+        document.getElementById('direct-links').textContent = data.summary.direct_links || 0;
         document.getElementById('longest-direct').textContent = data.summary.longest_direct || 'N/A';
         document.getElementById('longest-path').textContent = data.summary.longest_path || 'N/A';
 
         // Display direct links
-        displayDirectLinks(data.direct_links);
-        
+        displayDirectLinks(data.direct_links || []);
+
         // Display indirect links
-        displayIndirectLinks(data.indirect_links);
+        displayIndirectLinks(data.indirect_links || []);
 
         // Update tab badges
-        document.getElementById('direct-count').textContent = data.direct_links.length;
+        document.getElementById('direct-count').textContent = (data.direct_links || []).length;
         document.getElementById('indirect-count').textContent = data.indirect_links.length;
     }
 
@@ -355,16 +387,16 @@
         }
 
         noDataDiv.style.display = 'none';
-        
+
         let html = '';
         links.forEach((link, index) => {
             const snrBadgeClass = getSNRBadgeClass(link.avg_snr);
             const snrText = link.avg_snr !== null ? `${link.avg_snr.toFixed(1)} dB` : 'N/A';
-            
+
             // Handle null distance values
             const distanceText = link.distance_km !== null ? `${link.distance_km.toFixed(2)} km` : 'Unknown';
             const isLongDistance = link.distance_km !== null && link.distance_km >= 10;
-            
+
             html += `
                 <tr>
                     <td><strong>${index + 1}</strong></td>
@@ -385,7 +417,7 @@
                         <a href="${link.packet_url}" class="btn btn-sm btn-outline-primary" title="View packet details">
                             <i class="fas fa-eye"></i> Packet ${link.packet_id}
                         </a>
-                        <a href="/traceroute-hops?from_node=${link.from_node_id}&to_node=${link.to_node_id}" 
+                        <a href="/traceroute-hops?from_node=${link.from_node_id}&to_node=${link.to_node_id}"
                            class="btn btn-sm btn-outline-info ms-1" title="Analyze this link">
                             <i class="fas fa-route"></i> Analyze
                         </a>
@@ -408,16 +440,16 @@
         }
 
         noDataDiv.style.display = 'none';
-        
+
         let html = '';
         links.forEach((link, index) => {
             const snrBadgeClass = getSNRBadgeClass(link.avg_snr);
             const snrText = link.avg_snr !== null ? `${link.avg_snr.toFixed(1)} dB` : 'N/A';
-            
+
             // Handle null distance values
             const distanceText = link.total_distance_km !== null ? `${link.total_distance_km.toFixed(2)} km` : 'Unknown';
             const isVeryLongPath = link.total_distance_km !== null && link.total_distance_km >= 20;
-            
+
             // Format route display
             let routeDisplay = '';
             if (link.route_preview && link.route_preview.length > 0) {
@@ -430,7 +462,7 @@
             } else {
                 routeDisplay = 'Direct route';
             }
-            
+
             html += `
                 <tr>
                     <td><strong>${index + 1}</strong></td>
@@ -452,7 +484,7 @@
                         <a href="${link.packet_url}" class="btn btn-sm btn-outline-primary" title="View packet details">
                             <i class="fas fa-eye"></i> Packet ${link.packet_id}
                         </a>
-                        <a href="/traceroute-hops?from_node=${link.from_node_id}&to_node=${link.to_node_id}" 
+                        <a href="/traceroute-hops?from_node=${link.from_node_id}&to_node=${link.to_node_id}"
                            class="btn btn-sm btn-outline-info ms-1" title="Analyze this path">
                             <i class="fas fa-route"></i> Analyze
                         </a>
@@ -475,7 +507,7 @@
     function getRelativeTime(timestamp) {
         const now = Date.now() / 1000;
         const diff = now - timestamp;
-        
+
         if (diff < 60) return 'Just now';
         if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
         if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
@@ -483,4 +515,4 @@
         return `${Math.floor(diff / 2592000)}mo ago`;
     }
 </script>
-{% endblock %} 
+{% endblock %}

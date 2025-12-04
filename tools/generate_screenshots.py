@@ -2,7 +2,7 @@
 """Generate up-to-date screenshots of the web-UI for the README.
 
 This helper script
-1. Builds a **deterministic** demo database using the existing test fixtures.
+1. Builds a **deterministic** demo PostgreSQL database using the existing test fixtures.
 2. Launches a Flask app instance (in-memory) that serves the UI backed by that
    demo database.
 3. Uses Playwright (headless Chromium) to visit representative pages and
@@ -15,8 +15,15 @@ This helper script
 Run manually:
 
 ```bash
-uv run python scripts/generate_screenshots.py
+uv run python tools/generate_screenshots.py
 ```
+
+Environment variables:
+- MALLA_SCREENSHOT_DB: Database name (default: malla_screenshots)
+- MALLA_DATABASE_HOST: PostgreSQL host (default: localhost)
+- MALLA_DATABASE_PORT: PostgreSQL port (default: 5432)
+- MALLA_DATABASE_USER: PostgreSQL user (default: postgres or $USER)
+- MALLA_DATABASE_PASSWORD: PostgreSQL password (default: empty)
 
 Note: Playwright **must** have been previously installed – for CI you typically
 execute:
@@ -27,6 +34,8 @@ playwright install chromium --with-deps
 
 The script is safe to re-run; it overwrites existing screenshots and keeps the
 Flask server confined to a random free port for parallel execution.
+
+Requires: PostgreSQL server running and accessible.
 """
 
 from __future__ import annotations
@@ -34,6 +43,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import logging
+import os
 import socket
 import sys
 import threading
@@ -41,6 +51,9 @@ import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+
+# Set development environment
+os.environ["MALLA_ENV"] = "development"
 
 # ---------------------------------------------------------------------------
 # Local imports – *defer* until after the project root is on sys.path
@@ -70,6 +83,7 @@ logging.basicConfig(
 # The list of (route, output filename) to capture – order matters for README
 PAGES: list[tuple[str, str]] = [
     ("/", "dashboard.jpg"),
+    ("/stats", "stats.jpg"),
     ("/nodes", "nodes.jpg"),
     ("/packets", "packets.jpg"),
     ("/traceroute", "traceroutes.jpg"),
@@ -119,14 +133,11 @@ def _wait_until_healthy(host: str, port: int, timeout: float = 10.0) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _build_demo_database(db_path: Path) -> None:
-    """Create a fresh demo SQLite DB at *db_path* using the fixtures."""
-
-    if db_path.exists():
-        db_path.unlink()
-    _LOG.info("Creating demo database → %s", db_path)
+def _build_demo_database(dsn: str) -> None:
+    """Create a fresh demo PostgreSQL database using the fixtures."""
+    _LOG.info("Creating demo PostgreSQL database: %s", dsn)
     fixtures = DatabaseFixtures()
-    fixtures.create_test_database(str(db_path))
+    fixtures.create_test_database_postgres(dsn)
 
 
 def _launch_app_thread(cfg: AppConfig):
@@ -865,6 +876,50 @@ def _capture_screenshots(base_url: str, out_dir: Path) -> list[Path]:
                     except Exception:
                         pass  # Continue if graph doesn't render
 
+                elif route == "/stats":
+                    # Stats page - wait for all charts and data to load
+                    try:
+                        _LOG.info("Stats page: Waiting for charts to load...")
+                        # Wait for Chart.js to be available
+                        page.wait_for_function(
+                            "() => typeof Chart !== 'undefined'",
+                            timeout=10000,
+                        )
+
+                        # Wait for stats data to load (check for chart instances)
+                        page.wait_for_function(
+                            """() => {
+                                if (typeof Chart === 'undefined') return false;
+                                const charts = Object.values(Chart.instances || {});
+                                // Wait for at least some charts to be rendered
+                                return charts.length > 0 || document.querySelectorAll('canvas').length > 0;
+                            }""",
+                            timeout=15000,
+                        )
+
+                        # Wait a bit more for all API calls to complete
+                        page.wait_for_timeout(3000)
+
+                        # Disable animations for all charts
+                        page.evaluate("""() => {
+                            if (typeof Chart !== 'undefined') {
+                                Chart.defaults.animation = false;
+                                Chart.defaults.animations = false;
+                                Object.values(Chart.instances || {}).forEach(chart => {
+                                    if (chart.options) {
+                                        chart.options.animation = false;
+                                        chart.options.animations = false;
+                                        chart.update('none');
+                                    }
+                                });
+                            }
+                        }""")
+
+                        _LOG.info("Stats page: Charts loaded")
+                    except Exception as e:
+                        _LOG.warning(f"Stats page: Chart loading warning: {e}")
+                        pass  # Continue with screenshot even if charts don't fully load
+
                 elif route == "/map":
                     # Map - wait for tiles and markers to load
                     try:
@@ -964,17 +1019,33 @@ def main() -> None:  # noqa: D401 (simple function)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
-    # Step 1 – demo database
+    # Step 1 – demo database (PostgreSQL)
     # ------------------------------------------------------------------
-    demo_db = out_dir / "demo.db"
-    _build_demo_database(demo_db)
+    # Use a temporary PostgreSQL database for screenshots
+    # Default to localhost PostgreSQL if available, or use environment variables
+    demo_db_name = os.getenv("MALLA_SCREENSHOT_DB", "malla_screenshots")
+    demo_db_host = os.getenv("MALLA_DATABASE_HOST", "localhost")
+    demo_db_port = int(os.getenv("MALLA_DATABASE_PORT", "5432"))
+    demo_db_user = os.getenv("MALLA_DATABASE_USER", os.getenv("USER", "postgres"))
+    demo_db_password = os.getenv("MALLA_DATABASE_PASSWORD", "")
+
+    demo_dsn = f"postgresql://{demo_db_user}:{demo_db_password}@{demo_db_host}:{demo_db_port}/{demo_db_name}"
+    _LOG.info("Using PostgreSQL database: %s@%s:%s/%s", demo_db_user, demo_db_host, demo_db_port, demo_db_name)
+
+    _build_demo_database(demo_dsn)
 
     # ------------------------------------------------------------------
     # Step 2 – launch the Flask server
     # ------------------------------------------------------------------
     port = _find_free_port()
     cfg = AppConfig(
-        database_file=str(demo_db), host="127.0.0.1", port=port, debug=False
+        database_url=demo_dsn,
+        database_file="",  # Clear any SQLite file reference
+        host="127.0.0.1",
+        port=port,
+        debug=True,  # Enable debug mode for screenshots
+        secret_key="demo-secret-key-for-screenshots-only-not-for-production-use",
+        mqtt_broker_address="127.0.0.1",  # Required but not used for screenshots
     )
     _server_thread = _launch_app_thread(cfg)
 

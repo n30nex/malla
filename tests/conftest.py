@@ -18,6 +18,13 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 # Allow SQLite for tests regardless of production posture
 os.environ.setdefault("MALLA_ALLOW_SQLITE_FOR_TESTS", "1")
+# Provide a deterministic secret for tests to satisfy config validation
+os.environ.setdefault(
+    "MALLA_SECRET_KEY",
+    "malla-test-secret-key-please-rotate-32chars",
+)
+# Mark test runs as development to avoid production-only checks
+os.environ.setdefault("MALLA_ENV", "development")
 
 # Ensure local source is importable without an installed package
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -215,10 +222,12 @@ class GenericTestServer:
 @pytest.fixture(scope="session")
 def test_database_url(worker_id):
     """Provision a dedicated PostgreSQL database per worker with fixture data."""
-    base_dsn = os.getenv(
-        "MALLA_TEST_DATABASE_URL",
-        "postgresql://postgres:postgres@localhost:5432/postgres",
-    )
+    default_dsn = "postgresql://postgres:postgres@localhost:5432/postgres"
+    # When running inside the Docker compose network, the database host is "postgres"
+    if Path("/.dockerenv").exists():
+        default_dsn = "postgresql://postgres:postgres@postgres:5432/postgres"
+
+    base_dsn = os.getenv("MALLA_TEST_DATABASE_URL", default_dsn)
 
     parsed = urlparse(base_dsn)
     admin_db = parsed.path.lstrip("/") or "postgres"

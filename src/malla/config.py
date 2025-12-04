@@ -70,6 +70,9 @@ class AppConfig:
     # Supports comma-separated list of node IDs (decimal or hex format like "1127955948" or "!433b3dec" or "433b3dec")
     ignored_node_ids: str = ""
 
+    # If True, silently drop malformed packets that fail to parse as ServiceEnvelope (default: False)
+    ignore_malformed_packets: bool = False
+
     # Logging
     log_level: str = "INFO"
 

@@ -4,6 +4,7 @@ API routes for the Meshtastic Mesh Health Web UI
 
 import json
 import logging
+import threading
 import time
 from typing import Any
 
@@ -23,6 +24,7 @@ from ..database.connection import put_db_connection
 from ..instrumentation import register_metrics
 from ..models.traceroute import TraceroutePacket
 from ..services.analytics_service import AnalyticsService
+from ..services.gateway_service import GatewayService
 from ..services.location_service import LocationService
 from ..services.meshtastic_service import MeshtasticService
 from ..services.node_service import NodeService
@@ -47,6 +49,13 @@ TRACER = trace.get_tracer(__name__)
 
 # Register metrics hooks
 register_metrics(api_bp)
+
+# Lightweight in-process cache for expensive location responses
+_locations_cache: dict[str, tuple[dict[str, Any], float]] = {}
+_locations_cache_lock = threading.Lock()
+LOCATION_CACHE_TTL = 30  # seconds
+MAX_NODE_PAGE_SIZE = 10000
+MAX_TRACEROUTE_PAGE_SIZE = 2000
 
 
 @api_bp.route("/stats")
@@ -98,6 +107,1043 @@ def api_node_roles():
         return jsonify({"error": str(e), "node_roles": []}), 500
 
 
+@api_bp.route("/stats/hottest")
+def get_hottest_nodes():
+    """Get hottest nodes by temperature telemetry in the specified time period."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        filters = {}
+        if gateway_id:
+            filters["gateway_id"] = gateway_id
+
+        since = time.time() - (hours * 3600)
+        nodes = AnalyticsService._get_node_temperature_rankings(
+            filters, since, order="DESC", limit=10
+        )
+        return safe_jsonify(nodes)
+    except Exception as e:
+        logger.error(f"Error getting hottest nodes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/coldest")
+def get_coldest_nodes():
+    """Get coldest nodes by temperature telemetry in the specified time period."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        filters = {}
+        if gateway_id:
+            filters["gateway_id"] = gateway_id
+
+        since = time.time() - (hours * 3600)
+        nodes = AnalyticsService._get_node_temperature_rankings(
+            filters, since, order="ASC", limit=10
+        )
+        return safe_jsonify(nodes)
+    except Exception as e:
+        logger.error(f"Error getting coldest nodes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/telemetry/battery")
+def get_top_battery_nodes():
+    """Get top nodes by battery level telemetry."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        filters = {}
+        if gateway_id:
+            filters["gateway_id"] = gateway_id
+
+        since = time.time() - (hours * 3600)
+        nodes = AnalyticsService._get_node_telemetry_rankings(
+            filters, since, metric_type="battery", order="DESC", limit=10
+        )
+        return safe_jsonify(nodes)
+    except Exception as e:
+        logger.error(f"Error getting top battery nodes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/telemetry/humidity")
+def get_top_humidity_nodes():
+    """Get top nodes by humidity telemetry."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        filters = {}
+        if gateway_id:
+            filters["gateway_id"] = gateway_id
+
+        since = time.time() - (hours * 3600)
+        nodes = AnalyticsService._get_node_telemetry_rankings(
+            filters, since, metric_type="humidity", order="DESC", limit=10
+        )
+        return safe_jsonify(nodes)
+    except Exception as e:
+        logger.error(f"Error getting top humidity nodes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/telemetry/voltage")
+def get_top_voltage_nodes():
+    """Get top nodes by voltage telemetry."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        filters = {}
+        if gateway_id:
+            filters["gateway_id"] = gateway_id
+
+        since = time.time() - (hours * 3600)
+        nodes = AnalyticsService._get_node_telemetry_rankings(
+            filters, since, metric_type="voltage", order="DESC", limit=10
+        )
+        return safe_jsonify(nodes)
+    except Exception as e:
+        logger.error(f"Error getting top voltage nodes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/utilization")
+def get_channel_utilization():
+    """Get channel utilization metrics."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        filters = {}
+        if gateway_id:
+            filters["gateway_id"] = gateway_id
+
+        since = time.time() - (hours * 3600)
+        data = AnalyticsService._get_channel_utilization(filters, since)
+        return safe_jsonify(data)
+    except Exception as e:
+        logger.error(f"Error getting channel utilization: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/packet-types")
+def get_packet_type_distribution():
+    """Get packet type distribution statistics."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        filters = {}
+        if gateway_id:
+            filters["gateway_id"] = gateway_id
+
+        since = time.time() - (hours * 3600)
+        data = AnalyticsService._get_packet_type_distribution(filters, since)
+        return safe_jsonify(data)
+    except Exception as e:
+        logger.error(f"Error getting packet type distribution: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/packet-types/nodes")
+def get_packet_type_nodes():
+    """Get top nodes for a specific packet type (portnum_name)."""
+    try:
+        portnum_name = request.args.get("portnum_name")
+        if not portnum_name:
+            return jsonify({"error": "portnum_name is required"}), 400
+
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+
+        since = time.time() - (hours * 3600)
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            where_conditions = [
+                "ph.timestamp >= %s",
+                "ph.portnum_name = %s",
+                "ph.from_node_id IS NOT NULL",
+            ]
+            params: list[Any] = [since, portnum_name]
+
+            if gateway_id:
+                where_conditions.append("ph.gateway_id = %s")
+                params.append(gateway_id)
+
+            where_clause = " AND ".join(where_conditions)
+
+            cursor.execute(
+                f"""
+                SELECT
+                    ph.from_node_id AS node_id,
+                    MAX(ni.long_name) AS long_name,
+                    MAX(ni.short_name) AS short_name,
+                    MAX(ni.hw_model) AS hw_model,
+                    COUNT(*) AS packet_count,
+                    AVG(CAST(ph.rssi AS FLOAT)) AS avg_rssi,
+                    AVG(CAST(ph.snr AS FLOAT)) AS avg_snr,
+                    MAX(ph.timestamp) AS last_seen
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE {where_clause}
+                GROUP BY ph.from_node_id
+                HAVING COUNT(*) > 0
+                ORDER BY packet_count DESC
+                LIMIT 20
+                """,
+                params,
+            )
+
+            rows = cursor.fetchall() or []
+            nodes: list[dict[str, Any]] = []
+            for row in rows:
+                node_id = row.get("node_id")
+                display_name = (
+                    row.get("long_name")
+                    or row.get("short_name")
+                    or (f"!{node_id:08x}" if node_id is not None else "Unknown")
+                )
+                nodes.append(
+                    {
+                        "node_id": node_id,
+                        "display_name": display_name,
+                        "packet_count": row.get("packet_count", 0) or 0,
+                        "avg_rssi": row.get("avg_rssi"),
+                        "avg_snr": row.get("avg_snr"),
+                        "last_seen": row.get("last_seen"),
+                        "hw_model": row.get("hw_model"),
+                    }
+                )
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        return safe_jsonify(nodes)
+    except Exception as e:
+        logger.error(f"Error getting packet type nodes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/top-channel-utilizers")
+def get_top_channel_utilizers():
+    """Get top nodes by channel utilization (packets per node across channels)."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+
+        since = time.time() - (hours * 3600)
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            where_conditions = ["ph.timestamp >= %s", "ph.from_node_id IS NOT NULL"]
+            params: list[Any] = [since]
+
+            if gateway_id:
+                where_conditions.append("ph.gateway_id = %s")
+                params.append(gateway_id)
+
+            where_clause = " AND ".join(where_conditions)
+
+            cursor.execute(
+                f"""
+                SELECT
+                    ph.from_node_id AS node_id,
+                    MAX(ni.long_name) AS long_name,
+                    MAX(ni.short_name) AS short_name,
+                    MAX(ni.hw_model) AS hw_model,
+                    COUNT(*) AS packet_count,
+                    COUNT(DISTINCT ph.channel_id) AS channel_count,
+                    ARRAY_REMOVE(ARRAY_AGG(DISTINCT ph.channel_id), NULL) AS channels
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE {where_clause}
+                GROUP BY ph.from_node_id
+                HAVING COUNT(*) > 0
+                ORDER BY packet_count DESC
+                LIMIT 15
+                """,
+                params,
+            )
+
+            nodes = [dict(row) for row in cursor.fetchall() or []]
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        return safe_jsonify(nodes)
+    except Exception as e:
+        logger.error(f"Error getting top channel utilizers: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/channels")
+def get_channel_stats():
+    """Get channel activity statistics."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        filters = {}
+        if gateway_id:
+            filters["gateway_id"] = gateway_id
+
+        since = time.time() - (hours * 3600)
+
+        # Get channel activity from database
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            where_conditions = ["timestamp >= %s"]
+            params = [since]
+
+            if gateway_id:
+                where_conditions.append("gateway_id = %s")
+                params.append(gateway_id)
+
+            where_clause = " AND ".join(where_conditions)
+
+            cursor.execute(
+                f"""
+                SELECT
+                    channel_id,
+                    COUNT(*) as packet_count,
+                    COUNT(DISTINCT from_node_id) as unique_nodes
+                FROM packet_history
+                WHERE {where_clause} AND channel_id IS NOT NULL
+                GROUP BY channel_id
+                ORDER BY packet_count DESC
+                LIMIT 20
+                """,
+                params,
+            )
+
+            channels = [dict(row) for row in cursor.fetchall()]
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        return safe_jsonify({"channels": channels})
+    except Exception as e:
+        logger.error(f"Error getting channel stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/network-health")
+def get_network_health():
+    """Get network health metrics."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        filters = {}
+        if gateway_id:
+            filters["gateway_id"] = gateway_id
+
+        since = time.time() - (hours * 3600)
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            where_conditions = ["timestamp >= %s"]
+            params = [since]
+
+            if gateway_id:
+                where_conditions.append("gateway_id = %s")
+                params.append(gateway_id)
+
+            where_clause = " AND ".join(where_conditions)
+
+            cursor.execute(
+                f"""
+                SELECT
+                    COUNT(DISTINCT from_node_id) as unique_nodes,
+                    AVG(CAST(rssi AS FLOAT)) FILTER (WHERE rssi >= -150 AND rssi <= 0) as avg_rssi,
+                    AVG(CAST(snr AS FLOAT)) FILTER (WHERE snr >= -50 AND snr <= 50) as avg_snr,
+                    COUNT(*) as total_packets,
+                    COALESCE(SUM(CAST(payload_length AS BIGINT)), 0) as total_bytes
+                FROM packet_history
+                WHERE {where_clause}
+                """,
+                params,
+            )
+
+            row = cursor.fetchone() or {}
+            health = dict(row)
+
+            # Add total mesh node count (all-time) for deep-dive stats
+            cursor.execute("SELECT COUNT(*) AS total_nodes FROM node_info")
+            total_nodes_row = cursor.fetchone() or {}
+            health["total_nodes"] = total_nodes_row.get("total_nodes", 0) or 0
+
+            # Derive MiB sent for the selected time window
+            total_bytes_window = health.get("total_bytes") or 0
+            try:
+                mib_window = float(total_bytes_window) / (1024.0 * 1024.0)
+            except (TypeError, ValueError):
+                mib_window = 0.0
+            health["data_sent_mib"] = round(mib_window, 2)
+
+            # Lifetime totals across all history
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_packets_all_time,
+                    COALESCE(SUM(CAST(payload_length AS BIGINT)), 0) AS total_bytes_all_time
+                FROM packet_history
+                """
+            )
+            overall_row = cursor.fetchone() or {}
+            total_packets_all_time = overall_row.get("total_packets_all_time", 0) or 0
+            total_bytes_all_time = overall_row.get("total_bytes_all_time", 0) or 0
+            health["total_packets_all_time"] = total_packets_all_time
+            try:
+                mib_all_time = float(total_bytes_all_time) / (1024.0 * 1024.0)
+            except (TypeError, ValueError):
+                mib_all_time = 0.0
+            health["data_sent_mib_all_time"] = round(mib_all_time, 2)
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        return safe_jsonify(health)
+    except Exception as e:
+        logger.error(f"Error getting network health: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/node-naming")
+def get_node_naming_stats():
+    """Get statistics about node naming quality (custom vs default IDs)."""
+    try:
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            # Consider a node "custom named" if it has a non-empty long_name or short_name
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_nodes,
+                    SUM(
+                        CASE
+                            WHEN COALESCE(NULLIF(TRIM(long_name), ''), NULLIF(TRIM(short_name), '')) IS NOT NULL
+                            THEN 1 ELSE 0
+                        END
+                    ) AS custom_named
+                FROM node_info
+                """
+            )
+            row = cursor.fetchone() or {}
+            total_nodes = row.get("total_nodes") or 0
+            custom_named = row.get("custom_named") or 0
+            default_named = max(total_nodes - custom_named, 0)
+
+            # For convenience, also expose percentages
+            def pct(part: int, whole: int) -> float:
+                if not whole:
+                    return 0.0
+                return round(part / whole * 100.0, 2)
+
+            data = {
+                "total_nodes": total_nodes,
+                "custom_named": custom_named,
+                "default_named": default_named,
+                "custom_named_pct": pct(custom_named, total_nodes),
+                "default_named_pct": pct(default_named, total_nodes),
+            }
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        return safe_jsonify(data)
+    except Exception as e:
+        logger.error(f"Error getting node naming stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/highlighted-nodes")
+def get_highlighted_nodes():
+    """Get highlighted nodes for stats view (top active nodes with signal info)."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+
+        filters: dict[str, Any] = {}
+        if gateway_id:
+            filters["gateway_id"] = gateway_id
+
+        since = time.time() - (hours * 3600)
+        nodes = AnalyticsService._get_top_active_nodes(filters, since)
+        return safe_jsonify(nodes)
+    except Exception as e:
+        logger.error(f"Error getting highlighted nodes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/neighbors")
+def get_neighbors():
+    """Get neighbor connections from recent history."""
+    try:
+        hours = request.args.get("hours", 24, type=int)
+        since = time.time() - (hours * 3600)
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            # Fetch communications that imply proximity:
+            # 1. Direct messages (to_node_id is set and not broadcast)
+            # 2. Gateway receptions (gateway_id heard from_node_id)
+            cursor.execute(
+                """
+                SELECT
+                    from_node_id,
+                    to_node_id,
+                    gateway_id,
+                    COUNT(*) as count,
+                    AVG(rssi) as avg_rssi,
+                    AVG(snr) as avg_snr,
+                    MAX(timestamp) as last_seen
+                FROM packet_history
+                WHERE timestamp >= %s
+                  AND (
+                    (to_node_id IS NOT NULL AND to_node_id != 4294967295)
+                    OR
+                    (gateway_id IS NOT NULL)
+                  )
+                GROUP BY from_node_id, to_node_id, gateway_id
+                """,
+                (since,),
+            )
+
+            rows = cursor.fetchall() or []
+
+            # Process into unique connections
+            connections = {}
+
+            for row in rows:
+                from_id = row["from_node_id"]
+                to_id = row["to_node_id"]
+                gw_id = row["gateway_id"]
+
+                # Determine the peer
+                peer_id = None
+                if to_id and to_id != 4294967295:
+                    peer_id = to_id
+                elif gw_id:
+                    # If gateway heard it, they are neighbors
+                    # Convert hex gateway_id to int if needed
+                    try:
+                        if isinstance(gw_id, str):
+                            peer_id = int(gw_id.replace("!", ""), 16)
+                        else:
+                            peer_id = gw_id
+                    except (ValueError, TypeError):
+                        continue
+
+                if not from_id or not peer_id or from_id == peer_id:
+                    continue
+
+                # Create consistent key
+                key = f"{min(from_id, peer_id)}:{max(from_id, peer_id)}"
+
+                if key not in connections:
+                    connections[key] = {
+                        "node1": min(from_id, peer_id),
+                        "node2": max(from_id, peer_id),
+                        "count": 0,
+                        "rssi_sum": 0,
+                        "snr_sum": 0,
+                        "rssi_count": 0,
+                        "snr_count": 0,
+                        "last_seen": 0,
+                    }
+
+                conn = connections[key]
+                conn["count"] += row["count"]
+                conn["last_seen"] = max(conn["last_seen"], row["last_seen"])
+
+                if row["avg_rssi"] is not None:
+                    conn["rssi_sum"] += row["avg_rssi"] * row["count"]
+                    conn["rssi_count"] += row["count"]
+
+                if row["avg_snr"] is not None:
+                    conn["snr_sum"] += row["avg_snr"] * row["count"]
+                    conn["snr_count"] += row["count"]
+
+            # Get location data for nodes to filter by distance
+            from ..services.location_service import LocationService
+
+            node_ids_for_locations = set()
+            for conn in connections.values():
+                node_ids_for_locations.add(conn["node1"])
+                node_ids_for_locations.add(conn["node2"])
+
+            location_filters = {"node_ids": list(node_ids_for_locations)}
+            node_locations = LocationRepository.get_node_locations(location_filters)
+            location_map = {loc["node_id"]: loc for loc in node_locations}
+
+            # Filter connections by maximum RF distance (100 km default)
+            max_distance_km = request.args.get("max_distance_km", 100.0, type=float)
+
+            # Format for response (with distance filtering)
+            results = []
+            for conn in connections.values():
+                node1_loc = location_map.get(conn["node1"])
+                node2_loc = location_map.get(conn["node2"])
+
+                # Filter out connections where nodes are too far apart (unrealistic RF)
+                if node1_loc and node2_loc:
+                    if node1_loc.get("latitude") and node1_loc.get("longitude") and \
+                       node2_loc.get("latitude") and node2_loc.get("longitude"):
+                        distance_km = LocationService.calculate_haversine_distance(
+                            node1_loc["latitude"], node1_loc["longitude"],
+                            node2_loc["latitude"], node2_loc["longitude"]
+                        )
+                        if distance_km > max_distance_km:
+                            continue  # Skip this connection - too far for realistic RF
+
+                avg_rssi = (
+                    conn["rssi_sum"] / conn["rssi_count"]
+                    if conn["rssi_count"] > 0
+                    else None
+                )
+                avg_snr = (
+                    conn["snr_sum"] / conn["snr_count"]
+                    if conn["snr_count"] > 0
+                    else None
+                )
+
+                results.append(
+                    {
+                        "node1": conn["node1"],
+                        "node2": conn["node2"],
+                        "count": conn["count"],
+                        "avg_rssi": round(avg_rssi, 1)
+                        if avg_rssi is not None
+                        else None,
+                        "avg_snr": round(avg_snr, 1) if avg_snr is not None else None,
+                        "last_seen": conn["last_seen"],
+                    }
+                )
+
+            return safe_jsonify({"neighbors": results})
+
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.error(f"Error getting neighbors: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/gateways")
+def get_gateway_activity():
+    """Get gateway activity and diversity metrics."""
+    try:
+        hours = request.args.get("hours", 24, type=int)
+        data = GatewayService.get_gateway_statistics(hours=hours)
+        return safe_jsonify(data)
+    except Exception as e:
+        logger.error(f"Error getting gateway stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/signal-quality")
+def get_signal_quality():
+    """Get RSSI/SNR distribution for the selected time window."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        filters: dict[str, Any] = {}
+        if gateway_id:
+            filters["gateway_id"] = gateway_id
+
+        since = time.time() - (hours * 3600)
+        data = AnalyticsService._get_signal_quality_statistics(filters, since)
+        return safe_jsonify(data)
+    except Exception as e:
+        logger.error(f"Error getting signal quality stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/signal-quality/nodes")
+def get_signal_quality_nodes():
+    """Get per-node signal quality (avg RSSI/SNR) for gauge-style table."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+
+        since = time.time() - (hours * 3600)
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            where_conditions = [
+                "ph.timestamp >= %s",
+                "ph.from_node_id IS NOT NULL",
+            ]
+            params: list[Any] = [since]
+
+            if gateway_id:
+                where_conditions.append("ph.gateway_id = %s")
+                params.append(gateway_id)
+
+            where_clause = " AND ".join(where_conditions)
+
+            cursor.execute(
+                f"""
+                SELECT
+                    ph.from_node_id AS node_id,
+                    MAX(ni.long_name) AS long_name,
+                    MAX(ni.short_name) AS short_name,
+                    MAX(ni.hw_model) AS hw_model,
+                    COUNT(*) AS packet_count,
+                    AVG(CAST(ph.rssi AS FLOAT)) AS avg_rssi,
+                    AVG(CAST(ph.snr AS FLOAT)) AS avg_snr,
+                    MAX(ph.timestamp) AS last_seen
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE {where_clause}
+                GROUP BY ph.from_node_id
+                HAVING COUNT(*) > 0
+                ORDER BY AVG(CAST(ph.rssi AS FLOAT)) DESC NULLS LAST
+                LIMIT 20
+                """,
+                params,
+            )
+
+            rows = cursor.fetchall() or []
+            nodes: list[dict[str, Any]] = []
+            for row in rows:
+                node_id = row.get("node_id")
+                display_name = (
+                    row.get("long_name")
+                    or row.get("short_name")
+                    or (f"!{node_id:08x}" if node_id is not None else "Unknown")
+                )
+                nodes.append(
+                    {
+                        "node_id": node_id,
+                        "display_name": display_name,
+                        "packet_count": row.get("packet_count", 0) or 0,
+                        "avg_rssi": row.get("avg_rssi"),
+                        "avg_snr": row.get("avg_snr"),
+                        "last_seen": row.get("last_seen"),
+                        "hw_model": row.get("hw_model"),
+                    }
+                )
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                try:
+                    put_db_connection(conn)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        return safe_jsonify(nodes)
+    except Exception as e:
+        logger.error(f"Error getting per-node signal quality stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/temporal")
+def get_temporal_patterns():
+    """Get hourly delivery success and packet counts."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        filters: dict[str, Any] = {}
+        if gateway_id:
+            filters["gateway_id"] = gateway_id
+
+        since = time.time() - (hours * 3600)
+        data = AnalyticsService._get_temporal_patterns(filters, since)
+        data["hours"] = hours
+        return safe_jsonify(data)
+    except Exception as e:
+        logger.error(f"Error getting temporal stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/hop-distribution")
+def get_hop_distribution():
+    """Get distribution of message hop counts (routing efficiency)."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        since = time.time() - (hours * 3600)
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            where_conditions = [
+                "timestamp >= %s",
+                "hop_start IS NOT NULL",
+                "hop_limit IS NOT NULL"
+            ]
+            params = [since]
+
+            if gateway_id:
+                where_conditions.append("gateway_id = %s")
+                params.append(gateway_id)
+
+            where_clause = " AND ".join(where_conditions)
+
+            cursor.execute(
+                f"""
+                SELECT
+                    (hop_start - hop_limit) as hop_count,
+                    COUNT(*) as packet_count,
+                    COUNT(DISTINCT from_node_id) as unique_nodes
+                FROM packet_history
+                WHERE {where_clause}
+                GROUP BY (hop_start - hop_limit)
+                ORDER BY hop_count ASC
+                """,
+                params,
+            )
+
+            rows = cursor.fetchall() or []
+            distribution = [dict(row) for row in rows]
+
+            # Calculate summary stats
+            cursor.execute(
+                f"""
+                SELECT
+                    COUNT(*) as total_packets,
+                    COUNT(CASE WHEN (hop_start - hop_limit) = 0 THEN 1 END) as direct_packets,
+                    COUNT(CASE WHEN (hop_start - hop_limit) > 0 THEN 1 END) as routed_packets,
+                    AVG(CASE WHEN hop_start IS NOT NULL AND hop_limit IS NOT NULL
+                        THEN (hop_start - hop_limit) END) as avg_hops,
+                    MAX(CASE WHEN hop_start IS NOT NULL AND hop_limit IS NOT NULL
+                        THEN (hop_start - hop_limit) END) as max_hops
+                FROM packet_history
+                WHERE {where_clause}
+                """,
+                params,
+            )
+
+            summary = dict(cursor.fetchone() or {})
+
+            return safe_jsonify({
+                "distribution": distribution,
+                "summary": summary
+            })
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                put_db_connection(conn)
+    except Exception as e:
+        logger.error(f"Error getting hop distribution: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/hardware-models")
+def get_hardware_model_distribution():
+    """Get distribution of hardware models in the network."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        since = time.time() - (hours * 3600)
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            where_conditions = [
+                "ph.timestamp >= %s",
+                "ni.hw_model IS NOT NULL"
+            ]
+            params = [since]
+
+            if gateway_id:
+                where_conditions.append("ph.gateway_id = %s")
+                params.append(gateway_id)
+
+            where_clause = " AND ".join(where_conditions)
+
+            cursor.execute(
+                f"""
+                SELECT
+                    ni.hw_model,
+                    COUNT(DISTINCT ph.from_node_id) as unique_nodes,
+                    COUNT(*) as packet_count,
+                    AVG(CAST(ph.rssi AS FLOAT)) FILTER (WHERE ph.rssi >= -150 AND ph.rssi <= 0) as avg_rssi,
+                    AVG(CAST(ph.snr AS FLOAT)) FILTER (WHERE ph.snr >= -50 AND ph.snr <= 50) as avg_snr
+                FROM packet_history ph
+                INNER JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE {where_clause}
+                GROUP BY ni.hw_model
+                ORDER BY packet_count DESC
+                LIMIT 20
+                """,
+                params,
+            )
+
+            rows = cursor.fetchall() or []
+            return safe_jsonify([dict(row) for row in rows])
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                put_db_connection(conn)
+    except Exception as e:
+        logger.error(f"Error getting hardware model distribution: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/peak-hours")
+def get_peak_activity_hours():
+    """Get peak activity hours analysis."""
+    try:
+        gateway_id = request.args.get("gateway_id")
+        hours = request.args.get("hours", 24, type=int)
+        since = time.time() - (hours * 3600)
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            where_conditions = ["timestamp >= %s"]
+            params = [since]
+
+            if gateway_id:
+                where_conditions.append("gateway_id = %s")
+                params.append(gateway_id)
+
+            where_clause = " AND ".join(where_conditions)
+
+            cursor.execute(
+                f"""
+                SELECT
+                    EXTRACT(HOUR FROM to_timestamp(timestamp)) as hour,
+                    COUNT(*) as packet_count,
+                    COUNT(DISTINCT from_node_id) as unique_nodes,
+                    AVG(CAST(rssi AS FLOAT)) FILTER (WHERE rssi >= -150 AND rssi <= 0) as avg_rssi
+                FROM packet_history
+                WHERE {where_clause}
+                GROUP BY EXTRACT(HOUR FROM to_timestamp(timestamp))
+                ORDER BY hour ASC
+                """,
+                params,
+            )
+
+            rows = cursor.fetchall() or []
+            hourly_data = [dict(row) for row in rows]
+
+            # Find peak hours
+            if hourly_data:
+                max_packets = max(h.get("packet_count", 0) for h in hourly_data)
+                peak_hours = [h for h in hourly_data if h.get("packet_count", 0) == max_packets]
+            else:
+                peak_hours = []
+
+            return safe_jsonify({
+                "hourly_data": hourly_data,
+                "peak_hours": peak_hours,
+                "total_hours": len(hourly_data)
+            })
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                put_db_connection(conn)
+    except Exception as e:
+        logger.error(f"Error getting peak activity hours: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/node/<node_id>/track")
+def get_node_track(node_id):
+    """Get historical track for a node (last 24h)."""
+    try:
+        # Get last 24h of history (limit 500 points)
+        history = NodeService.get_node_location_history(node_id, limit=500)
+        return safe_jsonify(history)
+    except Exception as e:
+        logger.error(f"Error getting node track: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/analytics")
 def api_analytics():
     """API endpoint for analytics data."""
@@ -106,9 +1152,13 @@ def api_analytics():
         gateway_id = request.args.get("gateway_id")
         from_node = request.args.get("from_node", type=int)
         hop_count = request.args.get("hop_count", type=int)
+        hours = request.args.get("hours", 24, type=int)
 
         analytics_data = AnalyticsService.get_analytics_data(
-            gateway_id=gateway_id, from_node=from_node, hop_count=hop_count
+            gateway_id=gateway_id,
+            from_node=from_node,
+            hop_count=hop_count,
+            hours=hours,
         )
         return safe_jsonify(analytics_data)
     except Exception as e:
@@ -741,15 +1791,15 @@ def api_stream_packets():
         try:
             while True:
                 try:
-                    if conn is None:
-                        conn = get_db_connection()
-                        cursor = conn.cursor(cursor_factory=RealDictCursor)
+                    # Get connection for this poll only, release after query
+                    conn = get_db_connection()
+                    cursor = conn.cursor(cursor_factory=RealDictCursor)
                     cursor.execute(
                         """
                         SELECT
                             id, timestamp, from_node_id, to_node_id, gateway_id,
                             channel_id, portnum_name, rssi, snr, hop_limit, hop_start,
-                            mesh_packet_id
+                            mesh_packet_id, raw_payload
                         FROM packet_history
                         WHERE id > %s
                         ORDER BY id ASC
@@ -758,6 +1808,10 @@ def api_stream_packets():
                         (last_id,),
                     )
                     rows = cursor.fetchall()
+                    cursor.close()
+                    put_db_connection(conn)
+                    conn = None
+                    cursor = None
                 except Exception as exc:  # noqa: BLE001
                     logger.error(f"Live stream query failed: {exc}")
                     rows = []
@@ -767,6 +1821,17 @@ def api_stream_packets():
                     for row in rows:
                         last_id = max(last_id, row["id"])
                         payload = _row_to_payload(row)
+
+                        # Parse traceroute payload if it's a traceroute packet
+                        if payload.get("portnum_name") == "TRACEROUTE_APP" and row.get("raw_payload"):
+                            try:
+                                route_data = parse_traceroute_payload(row["raw_payload"])
+                                payload["route_nodes"] = route_data.get("route_nodes", [])
+                                payload["route_back"] = route_data.get("route_back", [])
+                            except Exception:
+                                payload["route_nodes"] = []
+                                payload["route_back"] = []
+
                         event_json = json.dumps(payload, default=str)
                         yield f"data: {event_json}\n\n"
                 else:
@@ -891,6 +1956,21 @@ def api_chat_messages():
         # Resolve node names (senders/recipients + gateways)
         name_map = get_bulk_node_short_names(list(node_ids | gateway_node_ids))
 
+        # Get location data for nodes (for city names and mini-map)
+        from ..services.location_service import LocationService
+        location_filters = {"node_ids": list(node_ids | gateway_node_ids)}
+        node_locations = LocationRepository.get_node_locations(location_filters)
+        location_map = {loc["node_id"]: loc for loc in node_locations}
+
+        # Reverse geocode city names for nodes with locations (cached, async-friendly)
+        city_map: dict[int, str | None] = {}
+        for node_id, loc in location_map.items():
+            if loc.get("latitude") and loc.get("longitude"):
+                city = LocationService.reverse_geocode_city(
+                    loc["latitude"], loc["longitude"]
+                )
+                city_map[node_id] = city
+
         messages: list[dict[str, Any]] = []
         for grp in grouped.values():
             from_node_id = grp.get("from_node_id")
@@ -899,6 +1979,7 @@ def api_chat_messages():
             heard_by: list[dict[str, Any]] = []
             for gw in sorted(grp["gateway_ids"]):
                 display_name = gw
+                gw_id_int = None
                 if gw and gw.startswith("!"):
                     try:
                         gw_id_int = int(gw[1:], 16)
@@ -909,8 +1990,13 @@ def api_chat_messages():
                     {
                         "id": gw,
                         "display": display_name,
+                        "node_id": gw_id_int,
                     }
                 )
+
+            # Get location data for sender
+            from_location = location_map.get(from_node_id) if from_node_id else None
+            from_city = city_map.get(from_node_id) if from_node_id else None
 
             messages.append(
                 {
@@ -934,6 +2020,10 @@ def api_chat_messages():
                     "text": grp.get("text"),
                     "heard_by": heard_by,
                     "heard_by_count": len(heard_by),
+                    # Location data for sender (for city label and mini-map)
+                    "from_latitude": from_location.get("latitude") if from_location else None,
+                    "from_longitude": from_location.get("longitude") if from_location else None,
+                    "from_city": from_city,
                 }
             )
 
@@ -954,12 +2044,6 @@ def api_locations():
 
     Response is cached for 30 seconds to improve performance.
     """
-    import time
-
-    from flask import g
-
-    from ..cache import cache_result
-
     start_time_perf = time.time()
     logger.info("API locations endpoint accessed")
 
@@ -972,16 +2056,17 @@ def api_locations():
     cache_key = "_".join(str(p) for p in cache_key_parts)
 
     # Check cache (30 second TTL)
-    cache_ttl = 30
-    if hasattr(g, "locations_cache") and cache_key in g.locations_cache:
-        cached_data, cached_time = g.locations_cache[cache_key]
-        if time.time() - cached_time < cache_ttl:
-            logger.debug("Returning cached /api/locations response")
-            return safe_jsonify(cached_data)
-
-    # Initialize cache in g if needed
-    if not hasattr(g, "locations_cache"):
-        g.locations_cache = {}
+    now = time.time()
+    with _locations_cache_lock:
+        cached_entry = _locations_cache.get(cache_key)
+        if cached_entry:
+            cached_data, cached_time = cached_entry
+            if now - cached_time < LOCATION_CACHE_TTL:
+                logger.debug("Returning cached /api/locations response")
+                return safe_jsonify(cached_data)
+            else:
+                # Drop stale entry
+                _locations_cache.pop(cache_key, None)
 
     try:
         # Build filters from request parameters
@@ -1063,8 +2148,17 @@ def api_locations():
             "data_period_days": 14,
         }
 
-        # Cache the response
-        g.locations_cache[cache_key] = (response_data, time.time())
+        # Cache the response (prune stale entries opportunistically)
+        cache_time = time.time()
+        with _locations_cache_lock:
+            _locations_cache[cache_key] = (response_data, cache_time)
+            stale_keys = [
+                key
+                for key, (_data, ts) in _locations_cache.items()
+                if cache_time - ts > (LOCATION_CACHE_TTL * 2)
+            ]
+            for key in stale_keys:
+                _locations_cache.pop(key, None)
 
         return safe_jsonify(response_data)
     except Exception as e:
@@ -1331,7 +2425,7 @@ def api_traceroute_hops_nodes():
         # Time the database query
         db_start = time.time()
         conn = get_db_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         # Get nodes that have been involved in traceroutes (either as source or destination)
         query = """
@@ -1340,7 +2434,7 @@ def api_traceroute_hops_nodes():
                 ni.long_name,
                 ni.short_name,
                 ni.hw_model,
-                printf('!%08x', ni.node_id) as hex_id
+                ('!' || lpad(to_hex(ni.node_id), 8, '0')) as hex_id
             FROM node_info ni
             WHERE ni.node_id IN (
                 SELECT DISTINCT from_node_id FROM packet_history
@@ -1633,19 +2727,49 @@ def api_traceroute_graph():
         if primary_channel:
             extra_filters["primary_channel"] = primary_channel
 
-        # Get graph data from service
-        graph_data = TracerouteService.get_network_graph_data(
-            hours=hours,
-            min_snr=min_snr,
-            include_indirect=include_indirect,
-            filters=extra_filters if extra_filters else None,
-        )
+        # Get graph data from service with timeout protection
+        try:
+            graph_data = TracerouteService.get_network_graph_data(
+                hours=hours,
+                min_snr=min_snr,
+                include_indirect=include_indirect,
+                filters=extra_filters if extra_filters else None,
+                limit_packets=2000,  # Limit to prevent long-running queries
+            )
 
-        return safe_jsonify(graph_data)
+            # Ensure required fields exist
+            if "nodes" not in graph_data:
+                graph_data["nodes"] = []
+            if "links" not in graph_data:
+                graph_data["links"] = []
+            if "stats" not in graph_data:
+                graph_data["stats"] = {
+                    "nodes": 0,
+                    "links": 0,
+                    "time_period": f"{hours}h",
+                    "last_update": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+
+            return safe_jsonify(graph_data)
+        except Exception as service_error:
+            logger.error(f"Error in TracerouteService.get_network_graph_data: {service_error}")
+            # Return empty graph structure instead of 500 to allow UI to show message
+            return jsonify({
+                "nodes": [],
+                "links": [],
+                "indirect_connections": [],
+                "stats": {
+                    "nodes": 0,
+                    "links": 0,
+                    "time_period": f"{hours}h",
+                    "last_update": time.strftime("%Y-%m-%d %H:%M:%S")
+                },
+                "error": str(service_error)
+            })
 
     except Exception as e:
         logger.error(f"Error in API traceroute graph: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "nodes": [], "links": [], "stats": {"nodes": 0, "links": 0}}), 500
 
 
 @api_bp.route("/packets/data", methods=["GET"])
@@ -2021,12 +3145,30 @@ def api_packets_export():
                 pass
 
         # Time range filters
-        start_time = request.args.get("start_time")
-        end_time = request.args.get("end_time")
-        if start_time:
-            filters["start_time"] = start_time
-        if end_time:
-            filters["end_time"] = end_time
+        start_time_str = request.args.get("start_time", "").strip()
+        if start_time_str:
+            try:
+                from datetime import datetime
+
+                filters["start_time"] = datetime.fromisoformat(start_time_str).timestamp()
+            except (ValueError, TypeError):
+                # Allow numeric timestamps as a fallback
+                try:
+                    filters["start_time"] = float(start_time_str)
+                except (ValueError, TypeError):
+                    return jsonify({"error": "Invalid start_time format"}), 400
+
+        end_time_str = request.args.get("end_time", "").strip()
+        if end_time_str:
+            try:
+                from datetime import datetime
+
+                filters["end_time"] = datetime.fromisoformat(end_time_str).timestamp()
+            except (ValueError, TypeError):
+                try:
+                    filters["end_time"] = float(end_time_str)
+                except (ValueError, TypeError):
+                    return jsonify({"error": "Invalid end_time format"}), 400
 
         # Limit exports to 10,000 rows for safety
         limit = min(int(request.args.get("limit", 10000)), 10000)
@@ -2034,7 +3176,7 @@ def api_packets_export():
         # Fetch data using existing repository
         packet_repository = PacketRepository()
         result = packet_repository.get_packets(filters=filters, limit=limit, offset=0)
-        packets_data = result.get("data", [])
+        packets_data = result.get("packets", [])
 
         # Generate export
         if export_format == "csv":
@@ -2145,6 +3287,20 @@ def api_nodes_data():
         sort_by = request.args.get("sort_by", default="last_packet_time")
         sort_order = request.args.get("sort_order", default="desc")
 
+        if not limit or limit < 1:
+            return jsonify({"error": "limit must be a positive integer"}), 400
+        if limit > MAX_NODE_PAGE_SIZE:
+            return (
+                jsonify(
+                    {
+                        "error": f"limit must be <= {MAX_NODE_PAGE_SIZE}",
+                        "data": [],
+                        "total_count": 0,
+                    }
+                ),
+                400,
+            )
+
         # Build filters from query parameters
         filters: dict[str, Any] = {}
         hw_model = request.args.get("hw_model", "").strip()
@@ -2231,6 +3387,20 @@ def api_traceroute_data():
         group_packets = (
             request.args.get("group_packets", default="false").lower() == "true"
         )
+
+        if not limit or limit < 1:
+            return jsonify({"error": "limit must be a positive integer"}), 400
+        if limit > MAX_TRACEROUTE_PAGE_SIZE:
+            return (
+                jsonify(
+                    {
+                        "error": f"limit must be <= {MAX_TRACEROUTE_PAGE_SIZE}",
+                        "data": [],
+                        "total_count": 0,
+                    }
+                ),
+                400,
+            )
 
         # Build filters from query parameters
         filters: dict[str, Any] = {}
@@ -2541,8 +3711,3 @@ def safe_jsonify(data, *args, **kwargs):
     except Exception as err:
         logger.debug(f"JSON sanitation failed, using original data: {err}")
         return jsonify(data, *args, **kwargs)
-
-
-def register_api_routes(app):
-    """Register API routes with the Flask app."""
-    app.register_blueprint(api_bp)

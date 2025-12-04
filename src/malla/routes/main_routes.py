@@ -49,6 +49,16 @@ def dashboard():
         )
 
 
+@main_bp.route("/stats")
+def stats_view():
+    """Network statistics page."""
+    try:
+        return render_template("stats.html")
+    except Exception as e:
+        logger.error(f"Error in stats route: {e}")
+        return f"Stats error: {e}", 500
+
+
 @main_bp.route("/map")
 def map_view():
     """Node location map view."""

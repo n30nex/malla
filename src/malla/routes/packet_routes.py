@@ -878,13 +878,13 @@ def get_all_protobuf_message_classes() -> dict[str, Any]:
                         all_message_classes[full_name] = obj
 
             except Exception as e:
-                print(f"Warning: Could not import {module_name}: {e}")
+                logger.warning(f"Could not import {module_name}: {e}")
                 continue
 
         return all_message_classes
 
     except Exception as e:
-        print(f"Error discovering protobuf classes: {e}")
+        logger.error(f"Error discovering protobuf classes: {e}")
         return {}
 
 
@@ -949,7 +949,7 @@ def get_protobuf_message_class_for_portnum(portnum_name: str) -> Any | None:
 
     except ImportError as e:
         # Log the import error for debugging
-        print(f"Import error in get_protobuf_message_class_for_portnum: {e}")
+        logger.warning(f"Import error in get_protobuf_message_class_for_portnum: {e}")
         return None
 
 

@@ -43,6 +43,10 @@
                 <div class="small mb-1"><span class="legend-dot" style="background:#fd7e14"></span> Telemetry</div>
                 <div class="small mb-1"><span class="legend-line" style="border-color:#ffc107"></span> Traceroute hops</div>
                 <div class="small mb-1"><span class="legend-line" style="border-color:#6c757d; border-style:dashed"></span> Direct/Multi-hop</div>
+                <div class="small mb-1"><span class="legend-line" style="border-color:#28a745; border-width:4px"></span> Excellent signal</div>
+                <div class="small mb-1"><span class="legend-line" style="border-color:#7cb342; border-width:3.5px"></span> Good signal</div>
+                <div class="small mb-1"><span class="legend-line" style="border-color:#ffc107; border-width:3px"></span> Fair signal</div>
+                <div class="small mb-1"><span class="legend-line" style="border-color:#dc3545; border-width:2px"></span> Poor signal</div>
                 <div class="small mb-1"><span class="legend-halo"></span> Gateway heard-by halo</div>
                 <div class="small mb-1"><span class="legend-dot role-gw"></span> Gateway</div>
                 <div class="small mb-1"><span class="legend-dot role-router"></span> Router/Repeater</div>
@@ -85,6 +89,14 @@
                         <input class="form-check-input" type="checkbox" id="toggle-cluster" checked>
                         <label class="form-check-label small" for="toggle-cluster">Clusters</label>
                     </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="toggle-neighbors">
+                        <label class="form-check-label small" for="toggle-neighbors">Neighbors</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="toggle-trails">
+                        <label class="form-check-label small" for="toggle-trails">Trails</label>
+                    </div>
                 </div>
             </div>
 
@@ -114,6 +126,11 @@
         <button class="btn btn-sm btn-dark live-map-panel-toggle" id="live-map-panel-toggle" aria-label="Toggle filters" aria-expanded="true" title="Filters & live feed">
             <i class="bi bi-sliders"></i>
         </button>
+
+        <!-- Node Details Panel -->
+        <div class="node-details-panel shadow-lg d-none" id="node-details-panel">
+            <div class="node-details-content"></div>
+        </div>
     </div>
 </div>
 {% endblock %}
@@ -386,6 +403,73 @@
   }
   @keyframes dashflow {
     to { stroke-dashoffset: -60; }
+  }
+  .signal-tooltip {
+    background: rgba(0, 0, 0, 0.85);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+  .neighbor-connection {
+    pointer-events: stroke;
+  }
+  .neighbor-tooltip {
+    background: rgba(0, 0, 0, 0.85);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+  .node-trail {
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
+  /* Node Details Panel */
+  .node-details-panel {
+    position: absolute;
+    top: 72px;
+    left: 18px;
+    width: min(350px, 25vw);
+    max-height: calc(100% - 24px);
+    background: rgba(17, 17, 20, 0.95);
+    color: #fff;
+    border-radius: 12px;
+    padding: 16px;
+    overflow-y: auto;
+    backdrop-filter: blur(6px);
+    z-index: 1600;
+    border: 1px solid rgba(13, 110, 253, 0.25);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+  .node-details-header h6 {
+    color: #fff;
+    font-weight: 600;
+    margin: 0;
+  }
+  .node-details-body {
+    font-size: 0.9rem;
+  }
+  .node-details-body strong {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .node-details-body .border-top {
+    border-color: rgba(255, 255, 255, 0.1) !important;
+  }
+  @media (max-width: 992px) {
+    .node-details-panel {
+      width: 92%;
+      left: 4%;
+      right: 4%;
+      max-height: 40vh;
+      top: auto;
+      bottom: 60px;
+    }
   }
 </style>
 {% endblock %}

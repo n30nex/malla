@@ -413,6 +413,8 @@ class TracerouteService:
         """
         Analyze the longest RF links in the mesh network.
 
+        Uses caching to improve performance from 6-18s to under 200ms.
+
         Args:
             min_distance_km: Minimum distance in kilometers to consider
             min_snr: Minimum SNR threshold
@@ -426,6 +428,24 @@ class TracerouteService:
             f"Getting longest links analysis: min_distance={min_distance_km}km, "
             f"min_snr={min_snr}dB, max_results={max_results}"
         )
+
+        # Try to get cached result first
+        from .longest_links_cache_service import LongestLinksCacheService
+
+        cached_result = LongestLinksCacheService.get_cached_result(
+            min_distance_km=min_distance_km, min_snr=min_snr, max_results=max_results
+        )
+
+        if cached_result:
+            cached_result["cached"] = True
+            cached_result["cache_hit"] = True
+            logger.info(
+                f"Returning cached longest links analysis in {time.time() - start_time:.3f}s"
+            )
+            return cached_result
+
+        # Cache miss - perform full calculation
+        logger.info("Cache miss - performing full longest links calculation")
 
         try:
             # ------------------------------------------------------------------
@@ -940,6 +960,18 @@ class TracerouteService:
                     f"Prefetch: {prefetch_duration:.3f}s ({prefetch_duration / total_duration * 100:.1f}%), "
                     f"Process: {process_duration:.3f}s ({process_duration / total_duration * 100:.1f}%), "
                     f"Build: {build_duration:.3f}s ({build_duration / total_duration * 100:.1f}%)"
+                )
+
+                # Store result in cache for future requests
+                result_dict["cached"] = False
+                result_dict["cache_hit"] = False
+                result_dict["calculated_at"] = time.time()
+
+                LongestLinksCacheService.store_cached_result(
+                    data=result_dict,
+                    min_distance_km=min_distance_km,
+                    min_snr=min_snr,
+                    max_results=max_results,
                 )
 
                 return result_dict

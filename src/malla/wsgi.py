@@ -53,16 +53,16 @@ def main():
         # Get configuration
         cfg = get_config()
 
-        # Print startup information
-        print("=" * 60)
-        print("Malla Web UI (Gunicorn)")
-        print("=" * 60)
-        print(f"Database: {describe_database_target(cfg)}")
-        print(f"Web UI: http://{cfg.host}:{cfg.port}")
-        print("Workers: auto-detected")
-        print(f"Debug mode: {cfg.debug}")
-        print("=" * 60)
-        print()
+        # Log startup information
+        logger.info("=" * 60)
+        logger.info("Malla Web UI (Gunicorn)")
+        logger.info("=" * 60)
+        logger.info(f"Database: {describe_database_target(cfg)}")
+        logger.info(f"Web UI: http://{cfg.host}:{cfg.port}")
+        logger.info("Workers: auto-detected")
+        logger.info(f"Debug mode: {cfg.debug}")
+        logger.info("=" * 60)
+        logger.info("")
 
         # Configure Gunicorn
         gunicorn_config = {

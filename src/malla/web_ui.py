@@ -26,6 +26,7 @@ from .routes import register_routes
 
 # Import utility functions for template filters
 from .utils.formatting import format_node_id, format_time_ago
+from .utils.longest_links_precache import start_precache, stop_precache
 from .utils.node_utils import (
     start_cache_cleanup,
     stop_cache_cleanup,
@@ -49,6 +50,9 @@ def make_json_safe(obj):
     if isinstance(obj, bytes):
         # Convert bytes to hex string
         return obj.hex()
+    elif isinstance(obj, memoryview):
+        # Convert memoryview to hex string
+        return bytes(obj).hex()
     elif isinstance(obj, dict):
         return {key: make_json_safe(value) for key, value in obj.items()}
     elif isinstance(obj, list | tuple):
@@ -230,8 +234,13 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     logger.info("Starting node name cache cleanup background thread")
     start_cache_cleanup()
 
+    # Start longest links precaching
+    logger.info("Starting longest links precache background thread")
+    start_precache()
+
     # Register cleanup on app shutdown
     atexit.register(stop_cache_cleanup)
+    atexit.register(stop_precache)
 
     # Register all routes
     logger.info("Registering application routes")
@@ -263,7 +272,9 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     def handle_database_error(e: DatabaseError):
         """Handle database errors with 500 status."""
         logger.error(f"Database error: {e}", exc_info=True)
-        return jsonify({"error": "Database error", "message": "An internal error occurred"}), 500
+        return jsonify(
+            {"error": "Database error", "message": "An internal error occurred"}
+        ), 500
 
     @app.errorhandler(MallaError)
     def handle_malla_error(e: MallaError):
@@ -274,13 +285,20 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     @app.errorhandler(404)
     def handle_not_found(e):
         """Handle 404 errors."""
-        return jsonify({"error": "Not found", "message": "The requested resource was not found"}), 404
+        return jsonify(
+            {"error": "Not found", "message": "The requested resource was not found"}
+        ), 404
 
     @app.errorhandler(500)
     def handle_internal_error(e):
         """Handle 500 errors."""
         logger.error("Internal server error", exc_info=True)
-        return jsonify({"error": "Internal server error", "message": "An unexpected error occurred"}), 500
+        return jsonify(
+            {
+                "error": "Internal server error",
+                "message": "An unexpected error occurred",
+            }
+        ), 500
 
     # Add health check endpoint
     @app.route("/health")
@@ -339,16 +357,16 @@ def main():
         port = cfg.port
         debug = cfg.debug
 
-        # Print startup information
-        print("=" * 60)
-        print("Malla Web UI")
-        print("=" * 60)
-        print(f"Database: {describe_database_target(cfg)}")
-        print(f"Web UI: http://{host}:{port}")
-        print(f"Debug mode: {debug}")
-        print(f"Log level: {logging.getLogger().level}")
-        print("=" * 60)
-        print()
+        # Log startup information
+        logger.info("=" * 60)
+        logger.info("Malla Web UI")
+        logger.info("=" * 60)
+        logger.info(f"Database: {describe_database_target(cfg)}")
+        logger.info(f"Web UI: http://{host}:{port}")
+        logger.info(f"Debug mode: {debug}")
+        logger.info(f"Log level: {logging.getLogger().level}")
+        logger.info("=" * 60)
+        logger.info("")
 
         logger.info(f"Starting server on {host}:{port} (debug={debug})")
 

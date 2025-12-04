@@ -222,6 +222,29 @@ sentry_sdk.init(
 - **Consumer Lag**: Target < 1s for 95th percentile (MQTT receive to DB commit)
 - **Memory Usage**: Monitor container memory, target < 2GB for web service
 
+### API Endpoint Performance Expectations
+
+- **Lightweight endpoints (typical p95 < 1s)**:
+  - `/api/stats`, `/api/nodes`, `/api/packets`, `/api/locations`
+  - These use optimized SQL and in-memory caching (`AnalyticsService._CACHE`) with a ~60s TTL.
+- **Telemetry endpoints**:
+  - `/api/stats/hottest`, `/api/stats/coldest`, `/api/stats/telemetry/*`
+  - Backed by decoded `TELEMETRY_APP` packets and the `node_telemetry_latest` table when available.
+  - For large deployments, prefer shorter time ranges (e.g. 6–24 hours) and gateway filters.
+- **Expensive but cached endpoints**:
+  - `/api/longest-links` performs heavy geospatial analysis over traceroute data.
+  - Results are cached in `cached_longest_links` and reused for the same parameter set.
+  - First request with a new parameter combination can take multiple seconds; subsequent requests are typically < 200ms while the cache entry is fresh.
+
+### Telemetry-Backed Charts
+
+- **Temperature charts (hottest/coldest nodes)**:
+  - Require Meshtastic nodes to send `TELEMETRY_APP` packets with `environment_metrics.temperature` populated.
+  - If nodes only send device metrics (battery/voltage) and no environment metrics, temperature charts will legitimately show “No data available”.
+- **Battery / humidity / voltage charts**:
+  - Require corresponding fields in `device_metrics` (battery_level, voltage) and `environment_metrics.relative_humidity`.
+  - The `node_telemetry_latest` table stores the most recent decoded values per node to keep these queries fast on large datasets.
+
 ### Query Performance
 
 Monitor slow queries:

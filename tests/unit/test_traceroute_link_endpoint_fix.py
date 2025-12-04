@@ -80,10 +80,10 @@ class TestTracerouteLinkEndpointFix:
                     # Import here to use the mocked dependencies
                     from flask import Flask
 
-                    from src.malla.routes.api_routes import register_api_routes
+                    from src.malla.routes.api_routes import api_bp
 
                     app = Flask(__name__)
-                    register_api_routes(app)
+                    app.register_blueprint(api_bp)
 
                     with app.test_client() as client:
                         # Test the endpoint that was previously crashing
@@ -180,10 +180,10 @@ class TestTracerouteLinkEndpointFix:
                     # Import here to use the mocked dependencies
                     from flask import Flask
 
-                    from src.malla.routes.api_routes import register_api_routes
+                    from src.malla.routes.api_routes import api_bp
 
                     app = Flask(__name__)
-                    register_api_routes(app)
+                    app.register_blueprint(api_bp)
 
                     with app.test_client() as client:
                         # Test with nodes that have no RF hops between them

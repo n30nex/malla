@@ -73,7 +73,7 @@ from malla.config import (  # Import here to avoid circular import issues
     validate_config,
 )
 from malla.database.connection import get_db_connection, put_db_connection
-from malla.exceptions import DatabaseError, MQTTError
+from malla.exceptions import DatabaseError
 from malla.logging_utils import setup_logging
 from malla.telemetry import setup_telemetry
 
@@ -114,6 +114,9 @@ DECRYPTION_KEYS: list[str] = _cfg.get_decryption_keys()
 # Ignored node IDs - packets from these nodes will be dropped
 IGNORED_NODE_IDS: set[int] = _cfg.get_ignored_node_ids()
 
+# Whether to silently drop malformed packets
+IGNORE_MALFORMED_PACKETS: bool = _cfg.ignore_malformed_packets
+
 # Data retention settings
 DATA_RETENTION_HOURS: int = _cfg.data_retention_hours
 DATA_CLEANUP_INTERVAL_SECONDS: int = max(
@@ -138,6 +141,7 @@ if _cfg.otlp_endpoint:
 
 # --- Global Variables ---
 db_lock = threading.Lock()  # Thread lock for database access
+
 
 # LRU cache for node information with size limit to prevent memory growth
 class LRUNodeCache:
@@ -175,7 +179,9 @@ class LRUNodeCache:
         with self._lock:
             return key in self._cache
 
-    def get(self, key: int, default: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def get(
+        self, key: int, default: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
         with self._lock:
             if key in self._cache:
                 self._cache.move_to_end(key)
@@ -220,7 +226,11 @@ def _init_metrics():
     global _metrics_registered, PACKETS_RECEIVED, PACKETS_PARSED, PACKETS_PARSE_FAILED
     global PACKETS_DECRYPT_SUCCESS, PACKETS_DECRYPT_FAILED, ACTIVE_THREADS
     global DB_QUERY_DURATION, PACKET_PROCESS_DURATION, CLEANUP_FAILURES
-    global MQTT_CONSUMER_LAG, TOPIC_PACKETS_SUCCESS, TOPIC_PACKETS_ERROR, PACKETS_IGNORED
+    global \
+        MQTT_CONSUMER_LAG, \
+        TOPIC_PACKETS_SUCCESS, \
+        TOPIC_PACKETS_ERROR, \
+        PACKETS_IGNORED
 
     if _metrics_registered:
         return
@@ -559,100 +569,59 @@ def update_node_cache(
             node_cache[node_id]["primary_channel"] = primary_channel
         node_cache[node_id]["last_updated"] = current_time
 
-    # Update database using INSERT ... ON CONFLICT to handle existing nodes
-    with db_lock:
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
+    # Update database using atomic INSERT ... ON CONFLICT DO UPDATE
+    # Removed db_lock - PostgreSQL handles concurrency with ON CONFLICT
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
 
+    try:
+        # Use COALESCE to merge new values with existing ones (keep existing if new is None)
+        cursor.execute(
+            """
+            INSERT INTO node_info
+            (node_id, hex_id, long_name, short_name, hw_model, role,
+             is_licensed, mac_address, primary_channel, first_seen, last_updated)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (node_id) DO UPDATE SET
+                hex_id = COALESCE(EXCLUDED.hex_id, node_info.hex_id),
+                long_name = COALESCE(EXCLUDED.long_name, node_info.long_name),
+                short_name = COALESCE(EXCLUDED.short_name, node_info.short_name),
+                hw_model = COALESCE(EXCLUDED.hw_model, node_info.hw_model),
+                role = COALESCE(EXCLUDED.role, node_info.role),
+                is_licensed = COALESCE(EXCLUDED.is_licensed, node_info.is_licensed),
+                mac_address = COALESCE(EXCLUDED.mac_address, node_info.mac_address),
+                primary_channel = COALESCE(EXCLUDED.primary_channel, node_info.primary_channel),
+                last_updated = EXCLUDED.last_updated
+            WHERE node_info.last_updated < EXCLUDED.last_updated
+        """,
+            (
+                node_id,
+                hex_id,
+                long_name,
+                short_name,
+                hw_model,
+                role,
+                is_licensed,
+                mac_address,
+                primary_channel,
+                current_time,
+                current_time,
+            ),
+        )
+
+        conn.commit()
+    except Exception:
+        # Ensure transaction is rolled back on error
         try:
-            # Get existing values from database if node exists
-            cursor.execute(
-                "SELECT hex_id, long_name, short_name, hw_model, role, is_licensed, mac_address, primary_channel, first_seen FROM node_info WHERE node_id = %s",
-                (node_id,),
-            )
-            existing = cursor.fetchone()
-
-            if existing:
-                # Node exists, merge values (keep existing values if new values are None)
-                final_hex_id = hex_id if hex_id is not None else existing["hex_id"]
-                final_long_name = (
-                    long_name if long_name is not None else existing["long_name"]
-                )
-                final_short_name = (
-                    short_name if short_name is not None else existing["short_name"]
-                )
-                final_hw_model = (
-                    hw_model if hw_model is not None else existing["hw_model"]
-                )
-                final_role = role if role is not None else existing["role"]
-                final_is_licensed = (
-                    is_licensed if is_licensed is not None else existing["is_licensed"]
-                )
-                final_mac_address = (
-                    mac_address if mac_address is not None else existing["mac_address"]
-                )
-                final_primary_channel = (
-                    primary_channel
-                    if primary_channel is not None
-                    else existing["primary_channel"]
-                )
-
-                cursor.execute(
-                    """
-                    UPDATE node_info
-                    SET hex_id = %s, long_name = %s, short_name = %s, hw_model = %s, role = %s,
-                        is_licensed = %s, mac_address = %s, primary_channel = %s, last_updated = %s
-                    WHERE node_id = %s
-                """,
-                    (
-                        final_hex_id,
-                        final_long_name,
-                        final_short_name,
-                        final_hw_model,
-                        final_role,
-                        final_is_licensed,
-                        final_mac_address,
-                        final_primary_channel,
-                        current_time,
-                        node_id,
-                    ),
-                )
-
-                logging.debug(
-                    f"Updated existing node in database: {node_id} ({final_hex_id})"
-                )
-            else:
-                # New node, insert it
-                cursor.execute(
-                    """
-                    INSERT INTO node_info
-                    (node_id, hex_id, long_name, short_name, hw_model, role,
-                     is_licensed, mac_address, primary_channel, first_seen, last_updated)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                    (
-                        node_id,
-                        hex_id,
-                        long_name,
-                        short_name,
-                        hw_model,
-                        role,
-                        is_licensed,
-                        mac_address,
-                        primary_channel,
-                        current_time,
-                        current_time,
-                    ),
-                )
-
-                logging.debug(f"Added new node to database: {node_id} ({hex_id})")
-
-            conn.commit()
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            cursor.close()
         finally:
-            try:
-                cursor.close()
-            finally:
-                put_db_connection(conn)
+            put_db_connection(conn)
 
 
 def hex_id_to_numeric(hex_id: str) -> int | None:
@@ -800,82 +769,88 @@ def log_packet_to_database(
     relay_node = getattr(mesh_packet, "relay_node", None) if mesh_packet else None
     tx_after = getattr(mesh_packet, "tx_after", None) if mesh_packet else None
 
-    with db_lock:
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
+    # Removed db_lock - ThreadedConnectionPool is thread-safe and serialization
+    # was causing connection pool exhaustion under high message rates
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
 
+    try:
+        with (
+            TRACER.start_as_current_span("db.insert.packet_history") as span,
+            DB_QUERY_DURATION.labels("insert_packet_history").time(),
+        ):
+            if span is not None:
+                span.set_attribute("db.topic", topic)
+                span.set_attribute("db.gateway_id", gateway_id or "")
+                span.set_attribute("db.channel_id", channel_id or "")
+                span.set_attribute("db.portnum_name", portnum_name or "")
+                span.set_attribute("db.processed_successfully", processed_successfully)
+
+            cursor.execute(
+                """
+                INSERT INTO packet_history
+                (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name,
+                 gateway_id, channel_id, mesh_packet_id, rssi, snr, hop_limit, hop_start, payload_length,
+                 raw_payload, processed_successfully, via_mqtt, want_ack, priority, delayed,
+                 channel_index, rx_time, pki_encrypted, next_hop, relay_node, tx_after,
+                 message_type, raw_service_envelope, parsing_error)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+                (
+                    current_time,
+                    topic,
+                    from_node_id,
+                    to_node_id,
+                    portnum,
+                    portnum_name,
+                    gateway_id,
+                    channel_id,
+                    mesh_packet_id,
+                    rssi,
+                    snr,
+                    hop_limit,
+                    hop_start,
+                    payload_length,
+                    raw_payload,
+                    processed_successfully,
+                    via_mqtt,
+                    want_ack,
+                    priority,
+                    delayed,
+                    channel_index,
+                    rx_time,
+                    pki_encrypted,
+                    next_hop,
+                    relay_node,
+                    tx_after,
+                    message_type,
+                    raw_service_envelope_data,
+                    parsing_error,
+                ),
+            )
+
+            conn.commit()
+            db_commit_time = time.time()
+
+            # Calculate and record consumer lag (receive time to DB commit time)
+            if receive_time is not None:
+                lag = db_commit_time - receive_time
+                try:
+                    MQTT_CONSUMER_LAG.observe(lag)
+                except Exception:
+                    pass  # Metrics are optional; never block processing
+    except Exception:
+        # Ensure transaction is rolled back on error
         try:
-            with (
-                TRACER.start_as_current_span("db.insert.packet_history") as span,
-                DB_QUERY_DURATION.labels("insert_packet_history").time(),
-            ):
-                if span is not None:
-                    span.set_attribute("db.topic", topic)
-                    span.set_attribute("db.gateway_id", gateway_id or "")
-                    span.set_attribute("db.channel_id", channel_id or "")
-                    span.set_attribute("db.portnum_name", portnum_name or "")
-                    span.set_attribute(
-                        "db.processed_successfully", processed_successfully
-                    )
-
-                cursor.execute(
-                    """
-                    INSERT INTO packet_history
-                    (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name,
-                     gateway_id, channel_id, mesh_packet_id, rssi, snr, hop_limit, hop_start, payload_length,
-                     raw_payload, processed_successfully, via_mqtt, want_ack, priority, delayed,
-                     channel_index, rx_time, pki_encrypted, next_hop, relay_node, tx_after,
-                     message_type, raw_service_envelope, parsing_error)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                    (
-                        current_time,
-                        topic,
-                        from_node_id,
-                        to_node_id,
-                        portnum,
-                        portnum_name,
-                        gateway_id,
-                        channel_id,
-                        mesh_packet_id,
-                        rssi,
-                        snr,
-                        hop_limit,
-                        hop_start,
-                        payload_length,
-                        raw_payload,
-                        processed_successfully,
-                        via_mqtt,
-                        want_ack,
-                        priority,
-                        delayed,
-                        channel_index,
-                        rx_time,
-                        pki_encrypted,
-                        next_hop,
-                        relay_node,
-                        tx_after,
-                        message_type,
-                        raw_service_envelope_data,
-                        parsing_error,
-                    ),
-                )
-
-                conn.commit()
-                db_commit_time = time.time()
-
-                # Calculate and record consumer lag (receive time to DB commit time)
-                if receive_time is not None:
-                    lag = db_commit_time - receive_time
-                    try:
-                        MQTT_CONSUMER_LAG.observe(lag)
-                    except Exception:
-                        pass  # Metrics are optional; never block processing
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            cursor.close()
         finally:
-            try:
-                cursor.close()
-            finally:
-                put_db_connection(conn)
+            put_db_connection(conn)
 
 
 def get_packet_history(
@@ -974,10 +949,22 @@ def cleanup_old_data() -> None:
                 if batch_nodes_deleted < 1000:
                     break
 
-            if packets_deleted > 0 or nodes_deleted > 0:
+            # Delete old telemetry records
+            telemetry_deleted = 0
+            cursor.execute(
+                """
+                DELETE FROM node_telemetry_latest
+                WHERE last_updated < to_timestamp(%s)
+                """,
+                (cutoff_time,),
+            )
+            telemetry_deleted = cursor.rowcount
+            conn.commit()
+
+            if packets_deleted > 0 or nodes_deleted > 0 or telemetry_deleted > 0:
                 logging.info(
-                    f"Cleaned up {packets_deleted} old packets and {nodes_deleted} unused nodes "
-                    f"older than {DATA_RETENTION_HOURS} hours"
+                    f"Cleaned up {packets_deleted} old packets, {nodes_deleted} unused nodes, "
+                    f"and {telemetry_deleted} telemetry records older than {DATA_RETENTION_HOURS} hours"
                 )
             else:
                 logging.debug(
@@ -1358,40 +1345,143 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
                 " (via MQTT)" if getattr(mesh_packet, "via_mqtt", False) else ""
             )
 
-            if telemetry_data.HasField("device_metrics"):
-                metrics = telemetry_data.device_metrics
+            # Extract metrics for logging and for node_telemetry_latest upsert
+            device_metrics = (
+                telemetry_data.device_metrics
+                if telemetry_data.HasField("device_metrics")
+                else None
+            )
+            env_metrics = (
+                telemetry_data.environment_metrics
+                if telemetry_data.HasField("environment_metrics")
+                else None
+            )
+
+            # Log device telemetry if present
+            if device_metrics:
                 battery = (
-                    f"{metrics.battery_level}%"
-                    if metrics.HasField("battery_level")
+                    f"{device_metrics.battery_level}%"
+                    if device_metrics.HasField("battery_level")
                     else "N/A"
                 )
                 voltage = (
-                    f"{metrics.voltage / 1000.0:.2f}V"
-                    if metrics.HasField("voltage")
+                    f"{device_metrics.voltage / 1000.0:.2f}V"
+                    if device_metrics.HasField("voltage")
                     else "N/A"
                 )
                 logging.info(
                     f"Device telemetry from {from_node_display}{via_mqtt_str}: Battery {battery}, Voltage {voltage}"
                 )
-            elif telemetry_data.HasField("environment_metrics"):
-                metrics = telemetry_data.environment_metrics
+
+            # Log environment telemetry if present (can coexist with device telemetry)
+            if env_metrics:
                 temp = (
-                    f"{metrics.temperature:.1f}C"
-                    if metrics.HasField("temperature")
+                    f"{env_metrics.temperature:.1f}C"
+                    if env_metrics.HasField("temperature")
                     else "N/A"
                 )
                 humidity = (
-                    f"{metrics.relative_humidity:.1f}%"
-                    if metrics.HasField("relative_humidity")
+                    f"{env_metrics.relative_humidity:.1f}%"
+                    if env_metrics.HasField("relative_humidity")
                     else "N/A"
                 )
                 logging.info(
                     f"Environment telemetry from {from_node_display}{via_mqtt_str}: Temp {temp}, Humidity {humidity}"
                 )
-            else:
+
+            # Log if neither type is present
+            if not device_metrics and not env_metrics:
                 logging.info(
                     f"Telemetry from {from_node_display}{via_mqtt_str}: Unknown type"
                 )
+
+            # Best-effort upsert into node_telemetry_latest for fast stats queries.
+            # Failures here should not break packet ingestion.
+            conn = None
+            cursor = None
+            try:
+                from .database.connection import (  # type: ignore
+                    get_db_connection,
+                    put_db_connection,
+                )
+
+                # Extract values for database insert
+                temperature_value = None
+                humidity_value = None
+                pressure_value = None
+                battery_level_value = None
+                voltage_value = None
+
+                if env_metrics:
+                    if env_metrics.HasField("temperature"):
+                        temperature_value = float(env_metrics.temperature)
+                        logging.info(
+                            f"Extracted temperature {temperature_value}°C for node {from_node_id_numeric}"
+                        )
+                    if env_metrics.HasField("relative_humidity"):
+                        humidity_value = float(env_metrics.relative_humidity)
+                    if env_metrics.HasField("barometric_pressure"):
+                        pressure_value = float(env_metrics.barometric_pressure)
+
+                if device_metrics:
+                    if device_metrics.HasField("battery_level"):
+                        battery_level_value = int(device_metrics.battery_level)
+                    if device_metrics.HasField("voltage"):
+                        voltage_value = float(device_metrics.voltage) / 1000.0
+
+                conn = get_db_connection()
+                cursor = conn.cursor()
+
+                if temperature_value is not None:
+                    logging.info(
+                        f"Inserting temperature {temperature_value}°C for node {from_node_id_numeric}"
+                    )
+
+                cursor.execute(
+                    """
+                    INSERT INTO node_telemetry_latest (
+                        node_id, temperature, humidity, pressure,
+                        battery_level, voltage, last_updated
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (node_id) DO UPDATE SET
+                        temperature = COALESCE(EXCLUDED.temperature, node_telemetry_latest.temperature),
+                        humidity = COALESCE(EXCLUDED.humidity, node_telemetry_latest.humidity),
+                        pressure = COALESCE(EXCLUDED.pressure, node_telemetry_latest.pressure),
+                        battery_level = COALESCE(EXCLUDED.battery_level, node_telemetry_latest.battery_level),
+                        voltage = COALESCE(EXCLUDED.voltage, node_telemetry_latest.voltage),
+                        last_updated = EXCLUDED.last_updated
+                    """,
+                    (
+                        from_node_id_numeric,
+                        temperature_value,
+                        humidity_value,
+                        pressure_value,
+                        battery_level_value,
+                        voltage_value,
+                    ),
+                )
+                conn.commit()
+            except Exception as exc:  # noqa: BLE001
+                # Ensure transaction is rolled back on error
+                if conn:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                logging.warning(
+                    f"Failed to upsert telemetry into node_telemetry_latest for node {from_node_id_numeric}: {exc}",
+                    exc_info=True,
+                )
+            finally:
+                # CRITICAL: Always return connection to pool, even on exception
+                if cursor:
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
+                if conn:
+                    put_db_connection(conn)
 
             processed_successfully = True
 
@@ -1477,6 +1567,19 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
             pass
     except Exception as e:
         parsing_error = f"Parsing error: {str(e)}"
+
+        # If configured to ignore malformed packets, drop silently
+        if IGNORE_MALFORMED_PACKETS:
+            logging.debug(f"Skipping malformed packet on topic {msg.topic}: {e}")
+            with ingest_stats_lock:
+                ingest_stats["parse_failed"] += 1
+            PACKETS_PARSE_FAILED.inc()
+            if span is not None:
+                span.set_attribute("malla.packet.skipped", True)
+                span.set_attribute("malla.packet.skip_reason", "malformed")
+            return  # Drop packet, don't save to database
+
+        # Otherwise, log as error but still try to save
         logging.error(
             f"Error processing MQTT protobuf message on topic {msg.topic}: {e}"
         )
@@ -1515,10 +1618,14 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
                 pass
             raise  # Re-raise database errors
         except Exception as db_error:
-            logging.error(f"Failed to log packet to database: {db_error}", exc_info=True)
+            logging.error(
+                f"Failed to log packet to database: {db_error}", exc_info=True
+            )
             # Record general error per topic
             try:
-                TOPIC_PACKETS_ERROR.labels(topic=msg.topic, error_type="processing").inc()
+                TOPIC_PACKETS_ERROR.labels(
+                    topic=msg.topic, error_type="processing"
+                ).inc()
             except Exception:
                 pass
             # Don't raise here - we want to continue processing other packets

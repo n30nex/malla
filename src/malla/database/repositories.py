@@ -69,7 +69,8 @@ class DashboardRepository:
                          THEN ROUND(SUM(CASE WHEN processed_successfully = TRUE THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1)
                          ELSE 0 END as success_rate
                 FROM packet_history
-                """ + where_clause,
+                """
+                + where_clause,
                 stats_params,
             )
 
@@ -97,7 +98,9 @@ class DashboardRepository:
                 SELECT portnum_name, COUNT(*) as count
                 FROM packet_history
                 WHERE portnum_name IS NOT NULL AND timestamp > %s
-                """ + (" AND gateway_id = %s" if gateway_id else "") + """
+                """
+                + (" AND gateway_id = %s" if gateway_id else "")
+                + """
                 GROUP BY portnum_name
                 ORDER BY count DESC
                 """,
@@ -114,8 +117,12 @@ class DashboardRepository:
                 "active_nodes_24h": stats_row["active_nodes_24h"] or 0,
                 "total_packets": total_packets_all_time or 0,
                 "recent_packets": stats_row["recent_packets"] or 0,
-                "avg_rssi": round(stats_row["avg_rssi"] or 0, 1),
-                "avg_snr": round(stats_row["avg_snr"] or 0, 1),
+                "avg_rssi": round(stats_row["avg_rssi"], 1)
+                if stats_row["avg_rssi"] is not None
+                else None,
+                "avg_snr": round(stats_row["avg_snr"], 1)
+                if stats_row["avg_snr"] is not None
+                else None,
                 "packet_types": packet_types,
                 "success_rate": stats_row["success_rate"] or 0,
             }
@@ -2737,7 +2744,7 @@ class NodeRepository:
             rows = cursor.fetchall()
             cursor.close()
             put_db_connection(conn)
-            return [row[0] for row in rows]
+            return [row["primary_channel"] for row in rows]
         except Exception as e:
             logger.error(f"Error getting unique primary channels: {e}")
             return []
@@ -3376,7 +3383,8 @@ class LocationRepository:
                 time_params.append(filters["end_time"])
 
             # Use DISTINCT ON for better performance - PostgreSQL optimizes this well
-            query = """
+            query = (
+                """
                 SELECT DISTINCT ON (ph.from_node_id)
                     ph.from_node_id as node_id,
                     ph.timestamp,
@@ -3392,9 +3400,13 @@ class LocationRepository:
                 WHERE ph.portnum IN (3, 73)
                 AND ph.raw_payload IS NOT NULL
                 AND ph.from_node_id IS NOT NULL
-                """ + (node_ids_clause if node_ids_clause else "") + time_filter + """
+                """
+                + (node_ids_clause if node_ids_clause else "")
+                + time_filter
+                + """
                 ORDER BY ph.from_node_id, ph.timestamp DESC
             """
+            )
 
             # Ensure we have optimal indexes for this query
             # This index supports the DISTINCT ON query pattern efficiently

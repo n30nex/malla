@@ -307,17 +307,30 @@
 
 .graph-tooltip {
     position: absolute;
-    background: rgba(0, 0, 0, 0.95);
+    background: linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.98) 100%);
     color: white;
-    padding: 12px 16px;
-    border-radius: 8px;
+    padding: 14px 18px;
+    border-radius: 12px;
     font-size: 13px;
     pointer-events: none;
     z-index: 1000;
     max-width: 400px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-    line-height: 1.5;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1);
+    line-height: 1.6;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(10px);
+    animation: tooltipFadeIn 0.2s ease-out;
+}
+
+@keyframes tooltipFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-5px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .graph-tooltip .tooltip-title {
@@ -344,52 +357,72 @@
 
 .node-circle {
     cursor: pointer;
-    transition: all 0.3s ease;
-    filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.2));
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    filter: drop-shadow(0 2px 8px rgba(0,0,0,0.3));
+    animation: nodePulse 2s ease-in-out infinite;
+}
+
+@keyframes nodePulse {
+    0%, 100% { filter: drop-shadow(0 2px 8px rgba(0,0,0,0.3)); }
+    50% { filter: drop-shadow(0 4px 16px rgba(0,0,0,0.5)); }
 }
 
 .node-circle:hover {
-    stroke-width: 4px !important;
-    filter: drop-shadow(2px 2px 8px rgba(0,0,0,0.4)) brightness(1.1);
-    transform: scale(1.1);
+    stroke-width: 5px !important;
+    filter: drop-shadow(0 6px 20px rgba(0,0,0,0.6)) brightness(1.2) drop-shadow(0 0 20px currentColor);
+    transform: scale(1.15);
+    animation: none;
 }
 
 .node-router {
-    fill: #4a90e2;
-    stroke: #2c5aa0;
+    fill: #6366f1;
+    stroke: #4f46e5;
+    stroke-width: 2.5px;
 }
 
 .node-gateway {
-    fill: #28a745;
-    stroke: #1e7e34;
+    fill: #10b981;
+    stroke: #059669;
+    stroke-width: 2.5px;
 }
 
 .node-gateway-router {
     fill: url(#gatewayRouterGradient);
-    stroke: #1e7e34;
+    stroke: #059669;
+    stroke-width: 2.5px;
 }
 
 .node-source {
-    fill: #ff6b35 !important;
-    stroke: #d63031 !important;
-    stroke-width: 4px !important;
+    fill: #f59e0b !important;
+    stroke: #d97706 !important;
+    stroke-width: 5px !important;
+    filter: drop-shadow(0 0 15px rgba(245, 158, 11, 0.6)) !important;
 }
 
 .node-target {
-    fill: #6c5ce7 !important;
-    stroke: #5f3dc4 !important;
-    stroke-width: 4px !important;
+    fill: #8b5cf6 !important;
+    stroke: #7c3aed !important;
+    stroke-width: 5px !important;
+    filter: drop-shadow(0 0 15px rgba(139, 92, 246, 0.6)) !important;
 }
 
 .link-line {
-    transition: all 0.3s ease;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     cursor: pointer;
-    filter: drop-shadow(1px 1px 2px rgba(0,0,0,0.1));
+    filter: drop-shadow(0 1px 3px rgba(0,0,0,0.2));
+    stroke-opacity: 0.85;
 }
 
 .link-line:hover {
-    stroke-width: 8px !important;
-    filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.3));
+    stroke-width: 6px !important;
+    stroke-opacity: 1 !important;
+    filter: drop-shadow(0 2px 8px rgba(0,0,0,0.4));
+    animation: linkGlow 1.5s ease-in-out infinite;
+}
+
+@keyframes linkGlow {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.9; }
 }
 
 .gateway-connection {
@@ -418,25 +451,42 @@
 
 .path-line {
     fill: none;
-    stroke-width: 4;
-    opacity: 0.8;
-    transition: all 0.3s ease;
+    stroke-width: 5;
+    opacity: 0.75;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     pointer-events: none;
-    filter: drop-shadow(1px 1px 2px rgba(0,0,0,0.2));
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.3));
+    stroke-dasharray: none;
 }
 
 .path-line:hover {
     opacity: 1;
-    stroke-width: 6;
+    stroke-width: 7;
+    filter: drop-shadow(0 4px 12px rgba(0,0,0,0.5));
 }
 
 .node-label {
     pointer-events: none;
     user-select: none;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    font-weight: 600;
-    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
-    font-size: 11px;
+    font-weight: 700;
+    text-shadow:
+        0 1px 2px rgba(0,0,0,0.8),
+        0 0 8px rgba(255,255,255,0.5),
+        0 0 12px rgba(255,255,255,0.3);
+    font-size: 12px;
+    fill: #ffffff;
+    transition: all 0.3s ease;
+}
+
+.node-circle:hover + .node-label,
+.node-label.highlighted {
+    font-size: 14px;
+    font-weight: 900;
+    text-shadow:
+        0 2px 4px rgba(0,0,0,0.9),
+        0 0 12px rgba(255,255,255,0.7),
+        0 0 20px rgba(255,255,255,0.5);
 }
 
 .link-label {

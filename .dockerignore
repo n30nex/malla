@@ -71,5 +71,3 @@ config.yaml
 # Other
 Makefile
 run_tests.py
-scripts/benchmark_*.py
-scripts/generate_screenshots.py
