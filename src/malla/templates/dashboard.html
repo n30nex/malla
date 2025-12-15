@@ -23,7 +23,8 @@
             <div class="d-flex align-items-center gap-2">
                 <div class="d-flex align-items-center gap-1">
                     <label for="analyticsTimeRange" class="form-label small mb-0">Time range</label>
-                    <select class="form-select form-select-sm" id="analyticsTimeRange" aria-label="Analytics time range">
+                    <select class="form-select form-select-sm" id="analyticsTimeRange"
+                        aria-label="Analytics time range">
                         <option value="1">Last 1h</option>
                         <option value="6">Last 6h</option>
                         <option value="24" selected>Last 24h</option>
@@ -64,8 +65,8 @@
     </div>
 
     <!-- Network Overview Cards - Redesigned for Heterogeneous Networks -->
-    <div class="row mb-4">
-        <div class="col-md-2">
+    <div class="row mb-4 g-3">
+        <div class="col-6 col-md-4 col-xl-2">
             <div class="card h-100">
                 <div class="card-body card-metric">
                     <div class="metric-value">{{ stats.total_nodes }}</div>
@@ -76,10 +77,12 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
+        <div class="col-6 col-md-4 col-xl-2">
             <div class="card h-100">
                 <div class="card-body card-metric">
-                    <div class="metric-value text-success">{{ stats.active_nodes_24h }}</div>
+                    <div class="metric-value text-success"
+                        style="-webkit-text-fill-color: initial; background: none; color: var(--bs-success) !important;">
+                        {{ stats.active_nodes_24h }}</div>
                     <div class="metric-label" data-bs-toggle="tooltip"
                         title="Nodes that have sent a packet in the last 24 hours">Active Nodes (24h) <i
                             class="bi bi-info-circle-fill text-muted small"></i></div>
@@ -89,10 +92,12 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
+        <div class="col-6 col-md-4 col-xl-2">
             <div class="card h-100">
                 <div class="card-body card-metric">
-                    <div class="metric-value text-warning">{{ gateway_count }}</div>
+                    <div class="metric-value text-warning"
+                        style="-webkit-text-fill-color: initial; background: none; color: var(--bs-warning) !important;">
+                        {{ gateway_count }}</div>
                     <div class="metric-label" data-bs-toggle="tooltip"
                         title="Number of unique MQTT gateways reporting data">Gateway Diversity <i
                             class="bi bi-info-circle-fill text-muted small"></i></div>
@@ -100,10 +105,12 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
+        <div class="col-6 col-md-4 col-xl-2">
             <div class="card h-100">
                 <div class="card-body card-metric">
-                    <div class="metric-value text-info">{{ stats.packet_types|length }}</div>
+                    <div class="metric-value text-info"
+                        style="-webkit-text-fill-color: initial; background: none; color: var(--bs-info) !important;">{{
+                        stats.packet_types|length }}</div>
                     <div class="metric-label" data-bs-toggle="tooltip"
                         title="Number of distinct Meshtastic portnums (protocols) observed">Protocol Diversity <i
                             class="bi bi-info-circle-fill text-muted small"></i></div>
@@ -111,7 +118,7 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
+        <div class="col-6 col-md-4 col-xl-2">
             <div class="card h-100">
                 <div class="card-body card-metric">
                     <div class="metric-value">{{ "{:,}".format(stats.total_packets) }}</div>
@@ -122,12 +129,13 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
+        <div class="col-6 col-md-4 col-xl-2">
             <div class="card h-100">
                 <div class="card-body card-metric">
                     {% set success_class = 'text-success' if stats.success_rate >= 95 else 'text-warning' if
                     stats.success_rate >= 85 else 'text-danger' %}
-                    <div class="metric-value {{ success_class }}">{{ stats.success_rate }}%</div>
+                    <div class="metric-value {{ success_class }}"
+                        style="-webkit-text-fill-color: initial; background: none;">{{ stats.success_rate }}%</div>
                     <div class="metric-label" data-bs-toggle="tooltip"
                         title="Percentage of packets successfully decoded and processed">Processing Success <i
                             class="bi bi-info-circle-fill text-muted small"></i></div>
@@ -381,8 +389,7 @@
                         <strong>Coverage Map:</strong><br>
                         <small class="text-muted">Visualize gateway and node coverage</small>
                     </div>
-                    <a href="{{ url_for('main.map_view') }}"
-                       class="btn btn-sm btn-outline-primary">
+                    <a href="{{ url_for('main.map_view') }}" class="btn btn-sm btn-outline-primary">
                         <i class="bi bi-geo-alt-fill me-1"></i> View
                     </a>
                 </div>
@@ -488,12 +495,12 @@
             danger: computedStyle.getPropertyValue('--bs-danger').trim(),
             secondary: computedStyle.getPropertyValue('--bs-secondary').trim(),
 
-            // Background colors with transparency
-            primaryBg: isDark ? 'rgba(13, 110, 253, 0.2)' : 'rgba(13, 110, 253, 0.1)',
-            successBg: isDark ? 'rgba(25, 135, 84, 0.2)' : 'rgba(25, 135, 84, 0.1)',
-            infoBg: isDark ? 'rgba(13, 202, 240, 0.2)' : 'rgba(13, 202, 240, 0.1)',
-            warningBg: isDark ? 'rgba(255, 193, 7, 0.2)' : 'rgba(255, 193, 7, 0.1)',
-            dangerBg: isDark ? 'rgba(220, 53, 69, 0.2)' : 'rgba(220, 53, 69, 0.1)',
+            // Background colors with transparency using CSS variables
+            primaryBg: `rgba(${computedStyle.getPropertyValue('--bs-primary-rgb').trim()}, ${isDark ? 0.2 : 0.1})`,
+            successBg: `rgba(${computedStyle.getPropertyValue('--bs-success-rgb').trim()}, ${isDark ? 0.2 : 0.1})`,
+            infoBg: `rgba(${computedStyle.getPropertyValue('--bs-info-rgb').trim()}, ${isDark ? 0.2 : 0.1})`,
+            warningBg: `rgba(${computedStyle.getPropertyValue('--bs-warning-rgb').trim()}, ${isDark ? 0.2 : 0.1})`,
+            dangerBg: `rgba(${computedStyle.getPropertyValue('--bs-danger-rgb').trim()}, ${isDark ? 0.2 : 0.1})`,
         };
     }
 

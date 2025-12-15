@@ -3,7 +3,8 @@
 }
 
 .node-picker-input {
-    padding-right: 35px; /* Make room for clear button */
+    padding-right: 35px;
+    /* Make room for clear button */
 }
 
 .node-picker-clear {
@@ -30,9 +31,10 @@
     left: 0;
     right: 0;
     z-index: 1050;
-    background: var(--bs-body-bg);
+    z-index: 1050;
+    background: var(--surface-1);
     border: 1px solid var(--bs-border-color);
-    border-radius: 0.375rem;
+    border-radius: var(--bs-border-radius);
     box-shadow: var(--bs-box-shadow);
     max-height: 300px;
     overflow-y: auto;
@@ -105,7 +107,8 @@
 }
 
 .gateway-picker-input {
-    padding-right: 35px; /* Make room for clear button */
+    padding-right: 35px;
+    /* Make room for clear button */
 }
 
 .gateway-picker-clear {
@@ -132,9 +135,10 @@
     left: 0;
     right: 0;
     z-index: 1050;
-    background: var(--bs-body-bg);
+    z-index: 1050;
+    background: var(--surface-1);
     border: 1px solid var(--bs-border-color);
-    border-radius: 0.375rem;
+    border-radius: var(--bs-border-radius);
     box-shadow: var(--bs-box-shadow);
     max-height: 300px;
     overflow-y: auto;

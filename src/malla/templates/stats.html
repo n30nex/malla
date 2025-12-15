@@ -496,728 +496,729 @@
 <!-- Moment.js for date formatting (loaded without SRI to avoid integrity mismatch blocking) -->
 <script src="https://cdn.jsdelivr.net/npm/moment@2.30.1/moment.min.js"></script>
 <script>
-(() => {
-    let currentHours = 24;
-    const chartInstances = {};
-    const palette = {
-        primary: '#0d6efd',
-        success: '#198754',
-        warning: '#ffc107',
-        info: '#0dcaf0',
-        danger: '#dc3545',
-        purple: '#6f42c1',
-        gray: '#adb5bd'
-    };
+    (() => {
+        let currentHours = 24;
+        const chartInstances = {};
+        const computedStyle = getComputedStyle(document.documentElement);
+        const palette = {
+            primary: computedStyle.getPropertyValue('--bs-primary').trim(),
+            success: computedStyle.getPropertyValue('--bs-success').trim(),
+            warning: computedStyle.getPropertyValue('--bs-warning').trim(),
+            info: computedStyle.getPropertyValue('--bs-info').trim(),
+            danger: computedStyle.getPropertyValue('--bs-danger').trim(),
+            purple: '#8b5cf6', // Indigo/Purple manual override or use a var if available
+            gray: computedStyle.getPropertyValue('--bs-secondary').trim()
+        };
 
-    document.addEventListener('DOMContentLoaded', function () {
-        // Check if Chart.js is available
-        if (typeof Chart === 'undefined') {
-            console.error('Chart.js is not loaded. Please check that Chart.js is included in base.html');
-            showError('networkOverview', 'Chart.js library is not loaded. Please refresh the page.');
-            return;
-        }
-
-        const timeRange = document.getElementById('timeRange');
-        if (timeRange) {
-            timeRange.addEventListener('change', function() {
-                currentHours = parseInt(this.value, 10);
-                loadStats();
-            });
-        }
-        loadStats();
-    });
-
-    async function loadStats() {
-        const hoursParam = `?hours=${currentHours}`;
-        try {
-            console.log('Loading stats data...');
-            const responses = await Promise.all([
-                fetch(`/api/stats/hottest${hoursParam}`),
-                fetch(`/api/stats/coldest${hoursParam}`),
-                fetch(`/api/stats/utilization${hoursParam}`),
-                fetch(`/api/stats/packet-types${hoursParam}`),
-                fetch(`/api/stats/channels${hoursParam}`),
-                fetch(`/api/stats/network-health${hoursParam}`),
-                fetch(`/api/stats/node-naming`),
-                fetch(`/api/stats/highlighted-nodes${hoursParam}`),
-                fetch(`/api/stats/gateways${hoursParam}`),
-                fetch(`/api/stats/signal-quality${hoursParam}`),
-                fetch(`/api/stats/signal-quality/nodes${hoursParam}`),
-                fetch(`/api/stats/temporal${hoursParam}`),
-                fetch(`/api/stats/telemetry/battery${hoursParam}`),
-                fetch(`/api/stats/telemetry/humidity${hoursParam}`),
-                fetch(`/api/stats/telemetry/voltage${hoursParam}`),
-                fetch(`/api/stats/top-channel-utilizers${hoursParam}`),
-                fetch(`/gateway/api/gateways/status${hoursParam}`),
-                fetch(`/api/stats/hop-distribution${hoursParam}`),
-                fetch(`/api/stats/hardware-models${hoursParam}`),
-                fetch(`/api/stats/peak-hours${hoursParam}`)
-            ]);
-
-            const names = ['hottest', 'coldest', 'utilization', 'packet types', 'channels', 'network health', 'node naming', 'highlighted nodes', 'gateways', 'signal quality', 'signal quality nodes', 'delivery', 'battery', 'humidity', 'voltage', 'top channel utilizers', 'gateway status', 'hop distribution', 'hardware models', 'peak hours'];
-            responses.forEach((res, idx) => {
-                if (!res.ok) {
-                    console.error(`Failed to load ${names[idx]}: ${res.status} ${res.statusText}`);
-                    throw new Error(`Failed to load ${names[idx]}: ${res.status} ${res.statusText}`);
-                }
-            });
-
-            const [
-                hottestData,
-                coldestData,
-                utilData,
-                packetTypesData,
-                channelsData,
-                healthData,
-                nodeNamingData,
-                highlightedNodesData,
-                gatewayData,
-                signalData,
-                signalNodesData,
-                temporalData,
-                batteryData,
-                humidityData,
-                voltageData,
-                topChannelUtilizersData,
-                gatewayStatusData,
-                hopDistributionData,
-                hardwareModelsData,
-                peakHoursData
-            ] = await Promise.all(responses.map(async (r) => {
-                try {
-                    return await r.json();
-                } catch (e) {
-                    console.error('Failed to parse JSON response:', e);
-                    return { error: 'Failed to parse response data' };
-                }
-            }));
-
-            console.log('Stats data loaded successfully');
-
-            // Handle each data set with error checking
-            if (hottestData && hottestData.error) {
-                showError('hottestNodesTable', hottestData.error);
-            } else {
-                renderNodeTable('hottestNodesTable', Array.isArray(hottestData) ? hottestData : (hottestData?.nodes || hottestData || []));
+        document.addEventListener('DOMContentLoaded', function () {
+            // Check if Chart.js is available
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not loaded. Please check that Chart.js is included in base.html');
+                showError('networkOverview', 'Chart.js library is not loaded. Please refresh the page.');
+                return;
             }
 
-            if (coldestData && coldestData.error) {
-                showError('coldestNodesTable', coldestData.error);
-            } else {
-                renderNodeTable('coldestNodesTable', Array.isArray(coldestData) ? coldestData : (coldestData?.nodes || coldestData || []));
+            const timeRange = document.getElementById('timeRange');
+            if (timeRange) {
+                timeRange.addEventListener('change', function () {
+                    currentHours = parseInt(this.value, 10);
+                    loadStats();
+                });
             }
-
-            if (utilData && utilData.error) {
-                showError('utilizationChart', utilData.error);
-            } else {
-                renderUtilizationChart(utilData || {});
-            }
-
-            if (packetTypesData && packetTypesData.error) {
-                showError('packetTypesChart', packetTypesData.error);
-            } else {
-                renderPacketTypesChart(packetTypesData || {});
-            }
-
-            if (channelsData && channelsData.error) {
-                showError('channelsChart', channelsData.error);
-            } else {
-                renderChannelsChart(channelsData || {});
-            }
-
-            if (healthData && healthData.error) {
-                showError('networkOverview', healthData.error);
-            } else {
-                renderNetworkHealth(healthData || {});
-            }
-
-            if (nodeNamingData && nodeNamingData.error) {
-                console.error('Failed to load node naming stats:', nodeNamingData.error);
-            } else {
-                renderNodeNamingStats(nodeNamingData || {});
-            }
-
-            if (Array.isArray(highlightedNodesData)) {
-                renderHighlightedNodesTable('highlightedNodesTable', highlightedNodesData);
-            } else if (highlightedNodesData && highlightedNodesData.error) {
-                showError('highlightedNodesTable', highlightedNodesData.error);
-            } else {
-                renderHighlightedNodesTable('highlightedNodesTable', []);
-            }
-
-            if (gatewayData && gatewayData.error) {
-                showError('gatewayChart', gatewayData.error);
-            } else {
-                renderGatewayChart(gatewayData || {});
-            }
-
-            if (signalData && signalData.error) {
-                showError('signalQualityChart', signalData.error);
-            } else {
-                renderSignalQualityChart(signalData || {});
-            }
-
-            if (Array.isArray(signalNodesData)) {
-                renderSignalNodesTable('signalNodesTable', signalNodesData);
-            } else if (signalNodesData && signalNodesData.error) {
-                showError('signalNodesTable', signalNodesData.error);
-            } else {
-                renderSignalNodesTable('signalNodesTable', []);
-            }
-
-            if (temporalData && temporalData.error) {
-                showError('deliveryChart', temporalData.error);
-            } else {
-                renderDeliveryChart(temporalData || {});
-            }
-
-            if (Array.isArray(topChannelUtilizersData)) {
-                renderTopChannelUtilizersTable('topChannelUtilizersTable', topChannelUtilizersData);
-            } else if (topChannelUtilizersData && topChannelUtilizersData.error) {
-                showError('topChannelUtilizersTable', topChannelUtilizersData.error);
-            } else {
-                renderTopChannelUtilizersTable('topChannelUtilizersTable', []);
-            }
-
-            if (gatewayStatusData && gatewayStatusData.error) {
-                showError('gatewayStatusTable', gatewayStatusData.error);
-            } else {
-                renderGatewayStatusTable('gatewayStatusTable', gatewayStatusData || {});
-            }
-
-            // Handle telemetry data (arrays, not objects)
-            if (Array.isArray(batteryData)) {
-                renderTelemetryChart('batteryChart', batteryData, 'Battery Level', '%', '#28a745');
-            } else if (batteryData && batteryData.error) {
-                showError('batteryChart', batteryData.error);
-            } else {
-                renderTelemetryChart('batteryChart', [], 'Battery Level', '%', '#28a745');
-            }
-
-            if (Array.isArray(humidityData)) {
-                renderTelemetryChart('humidityChart', humidityData, 'Humidity', '%', '#0dcaf0');
-            } else if (humidityData && humidityData.error) {
-                showError('humidityChart', humidityData.error);
-            } else {
-                renderTelemetryChart('humidityChart', [], 'Humidity', '%', '#0dcaf0');
-            }
-
-            if (Array.isArray(voltageData)) {
-                renderTelemetryChart('voltageChart', voltageData, 'Voltage', 'V', '#ffc107');
-            } else if (voltageData && voltageData.error) {
-                showError('voltageChart', voltageData.error);
-            } else {
-                renderTelemetryChart('voltageChart', [], 'Voltage', 'V', '#ffc107');
-            }
-        } catch (error) {
-            console.error('Error loading stats:', error);
-            [
-                'hottestNodesTable',
-                'coldestNodesTable',
-                'utilizationChart',
-                'packetTypesChart',
-                'channelsChart',
-                'gatewayChart',
-                'signalQualityChart',
-                'deliveryChart',
-                'networkOverview',
-                'batteryChart',
-                'humidityChart',
-                'voltageChart',
-                'topChannelUtilizersTable',
-                'gatewayStatusTable'
-            ].forEach(id => showError(id, 'Failed to load data. Please refresh the page.'));
-        }
-    }
-
-    function renderTelemetryChart(canvasId, data, label, unit, color) {
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) {
-            console.error(`${canvasId} canvas not found`);
-            return;
-        }
-
-        if (typeof Chart === 'undefined') {
-            console.error('Chart.js is not available');
-            showError(canvasId, 'Chart.js library is not loaded');
-            return;
-        }
-
-        resetChartContainer(canvas);
-        if (chartInstances[canvasId]) {
-            chartInstances[canvasId].destroy();
-        }
-
-        if (!data || data.length === 0) {
-            replaceChartWithMessage(canvas, `No ${label.toLowerCase()} data available`);
-            return;
-        }
-
-        const labels = data.map(node => {
-            const name = node.display_name || node.name || `Node ${node.node_id || 'Unknown'}`;
-            return name.length > 15 ? name.substring(0, 15) + '...' : name;
+            loadStats();
         });
-        const values = data.map(node => node.metric_value || 0);
 
-        const ctx = canvas.getContext('2d');
-        chartInstances[canvasId] = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels,
-                datasets: [{
-                    label: `${label} (${unit})`,
-                    data: values,
-                    backgroundColor: `${color}cc`,
-                    borderColor: color,
-                    borderWidth: 1.5
-                }]
-            },
-            options: {
-                indexAxis: 'y',
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: (context) => {
-                                const value = context.parsed.x || 0;
-                                return `${label}: ${value}${unit}`;
-                            }
-                        }
+        async function loadStats() {
+            const hoursParam = `?hours=${currentHours}`;
+            try {
+                console.log('Loading stats data...');
+                const responses = await Promise.all([
+                    fetch(`/api/stats/hottest${hoursParam}`),
+                    fetch(`/api/stats/coldest${hoursParam}`),
+                    fetch(`/api/stats/utilization${hoursParam}`),
+                    fetch(`/api/stats/packet-types${hoursParam}`),
+                    fetch(`/api/stats/channels${hoursParam}`),
+                    fetch(`/api/stats/network-health${hoursParam}`),
+                    fetch(`/api/stats/node-naming`),
+                    fetch(`/api/stats/highlighted-nodes${hoursParam}`),
+                    fetch(`/api/stats/gateways${hoursParam}`),
+                    fetch(`/api/stats/signal-quality${hoursParam}`),
+                    fetch(`/api/stats/signal-quality/nodes${hoursParam}`),
+                    fetch(`/api/stats/temporal${hoursParam}`),
+                    fetch(`/api/stats/telemetry/battery${hoursParam}`),
+                    fetch(`/api/stats/telemetry/humidity${hoursParam}`),
+                    fetch(`/api/stats/telemetry/voltage${hoursParam}`),
+                    fetch(`/api/stats/top-channel-utilizers${hoursParam}`),
+                    fetch(`/gateway/api/gateways/status${hoursParam}`),
+                    fetch(`/api/stats/hop-distribution${hoursParam}`),
+                    fetch(`/api/stats/hardware-models${hoursParam}`),
+                    fetch(`/api/stats/peak-hours${hoursParam}`)
+                ]);
+
+                const names = ['hottest', 'coldest', 'utilization', 'packet types', 'channels', 'network health', 'node naming', 'highlighted nodes', 'gateways', 'signal quality', 'signal quality nodes', 'delivery', 'battery', 'humidity', 'voltage', 'top channel utilizers', 'gateway status', 'hop distribution', 'hardware models', 'peak hours'];
+                responses.forEach((res, idx) => {
+                    if (!res.ok) {
+                        console.error(`Failed to load ${names[idx]}: ${res.status} ${res.statusText}`);
+                        throw new Error(`Failed to load ${names[idx]}: ${res.status} ${res.statusText}`);
                     }
-                },
-                scales: {
-                    x: {
-                        beginAtZero: true,
-                        title: { display: true, text: `${label} (${unit})` }
-                    },
-                    y: {
-                        beginAtZero: true
-                    }
-                }
-            }
-        });
-    }
+                });
 
-    function renderPacketTypesChart(data) {
-        const canvas = document.getElementById('packetTypesChart');
-        if (!canvas) {
-            console.error('packetTypesChart canvas not found');
-            return;
-        }
-
-        if (typeof Chart === 'undefined') {
-            console.error('Chart.js is not available');
-            showError('packetTypesChart', 'Chart.js library is not loaded');
-            return;
-        }
-
-        resetChartContainer(canvas);
-        if (chartInstances.packetTypesChart) {
-            chartInstances.packetTypesChart.destroy();
-        }
-
-        const packetTypes = Array.isArray(data) ? data : (data.packet_types || []);
-        if (!packetTypes.length) {
-            replaceChartWithMessage(canvas, 'No packet type data available');
-            return;
-        }
-
-        const labels = packetTypes.map(pt => pt.portnum_name || 'Unknown');
-        const counts = packetTypes.map(pt => pt.count || 0);
-        const colors = [
-            palette.primary,
-            palette.success,
-            palette.info,
-            palette.warning,
-            palette.danger,
-            palette.gray,
-            '#20c997',
-            palette.purple,
-            '#fd7e14',
-            '#0dcaf0'
-        ];
-
-        const ctx = canvas.getContext('2d');
-        chartInstances.packetTypesChart = new Chart(ctx, {
-            type: 'doughnut',
-            data: {
-                labels,
-                datasets: [{
-                    data: counts,
-                    backgroundColor: colors.slice(0, labels.length),
-                    borderWidth: 2,
-                    borderColor: '#fff'
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'right' },
-                    tooltip: {
-                        callbacks: {
-                            label: (context) => {
-                                const label = context.label || '';
-                                const value = context.parsed || 0;
-                                const total = counts.reduce((a, b) => a + b, 0);
-                                const pct = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
-                                return `${label}: ${value} (${pct}%)`;
-                            }
-                        }
-                    }
-                },
-                onClick: async (event, elements) => {
-                    if (!elements || !elements.length) return;
-                    const idx = elements[0].index;
-                    const portnumName = labels[idx];
-                    if (!portnumName || portnumName === 'Unknown') return;
-
+                const [
+                    hottestData,
+                    coldestData,
+                    utilData,
+                    packetTypesData,
+                    channelsData,
+                    healthData,
+                    nodeNamingData,
+                    highlightedNodesData,
+                    gatewayData,
+                    signalData,
+                    signalNodesData,
+                    temporalData,
+                    batteryData,
+                    humidityData,
+                    voltageData,
+                    topChannelUtilizersData,
+                    gatewayStatusData,
+                    hopDistributionData,
+                    hardwareModelsData,
+                    peakHoursData
+                ] = await Promise.all(responses.map(async (r) => {
                     try {
-                        const url = new URL('/api/stats/packet-types/nodes', window.location.origin);
-                        url.searchParams.set('portnum_name', portnumName);
-                        const hoursSelect = document.getElementById('timeRange');
-                        if (hoursSelect && hoursSelect.value) {
-                            url.searchParams.set('hours', hoursSelect.value);
-                        }
-
-                        const resp = await fetch(url.toString());
-                        if (!resp.ok) {
-                            throw new Error(`HTTP ${resp.status}`);
-                        }
-                        const nodes = await resp.json();
-                        renderNodeTable('hottestNodesTable', Array.isArray(nodes) ? nodes : []);
-                    } catch (err) {
-                        console.error('Failed to load nodes for packet type', portnumName, err);
+                        return await r.json();
+                    } catch (e) {
+                        console.error('Failed to parse JSON response:', e);
+                        return { error: 'Failed to parse response data' };
                     }
+                }));
+
+                console.log('Stats data loaded successfully');
+
+                // Handle each data set with error checking
+                if (hottestData && hottestData.error) {
+                    showError('hottestNodesTable', hottestData.error);
+                } else {
+                    renderNodeTable('hottestNodesTable', Array.isArray(hottestData) ? hottestData : (hottestData?.nodes || hottestData || []));
                 }
-            }
-        });
-    }
 
-    function renderChannelsChart(data) {
-        const canvas = document.getElementById('channelsChart');
-        if (!canvas) {
-            console.error('channelsChart canvas not found');
-            return;
-        }
-
-        if (typeof Chart === 'undefined') {
-            console.error('Chart.js is not available');
-            showError('channelsChart', 'Chart.js library is not loaded');
-            return;
-        }
-
-        resetChartContainer(canvas);
-        if (chartInstances.channelsChart) {
-            chartInstances.channelsChart.destroy();
-        }
-
-        const channels = (data && data.channels) || [];
-        if (!channels.length) {
-            replaceChartWithMessage(canvas, 'No channel data available');
-            return;
-        }
-
-        const labels = channels.map(c => c.channel_id || 'Unknown');
-        const packetCounts = channels.map(c => c.packet_count || 0);
-        const nodeCounts = channels.map(c => c.unique_nodes || 0);
-
-        const ctx = canvas.getContext('2d');
-        chartInstances.channelsChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: labels,
-                datasets: [
-                    {
-                        label: 'Packets',
-                        data: packetCounts,
-                        backgroundColor: `${palette.primary}cc`,
-                        borderColor: palette.primary,
-                        borderWidth: 1.5,
-                        yAxisID: 'y'
-                    },
-                    {
-                        label: 'Unique Nodes',
-                        data: nodeCounts,
-                        backgroundColor: `${palette.success}cc`,
-                        borderColor: palette.success,
-                        borderWidth: 1.5,
-                        yAxisID: 'y1'
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'top' },
-                },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        title: { display: true, text: 'Packets' }
-                    },
-                    y1: {
-                        beginAtZero: true,
-                        position: 'right',
-                        grid: { drawOnChartArea: false },
-                        title: { display: true, text: 'Nodes' }
-                    }
+                if (coldestData && coldestData.error) {
+                    showError('coldestNodesTable', coldestData.error);
+                } else {
+                    renderNodeTable('coldestNodesTable', Array.isArray(coldestData) ? coldestData : (coldestData?.nodes || coldestData || []));
                 }
-            }
-        });
-    }
 
-    function renderGatewayChart(data) {
-        const canvas = document.getElementById('gatewayChart');
-        if (!canvas) {
-            console.error('gatewayChart canvas not found');
-            return;
-        }
-
-        if (typeof Chart === 'undefined') {
-            console.error('Chart.js is not available');
-            showError('gatewayChart', 'Chart.js library is not loaded');
-            return;
-        }
-
-        resetChartContainer(canvas);
-        if (chartInstances.gatewayChart) {
-            chartInstances.gatewayChart.destroy();
-        }
-
-        const gateways = (data && (data.gateway_distribution || data.gateways)) || [];
-        if (!gateways.length) {
-            replaceChartWithMessage(canvas, 'No gateway activity available');
-            return;
-        }
-
-        const topGateways = gateways.slice(0, 8);
-        const labels = topGateways.map(g => g.gateway_id || 'Unknown');
-        const packetCounts = topGateways.map(g => g.packet_count || 0);
-        const uniqueSources = topGateways.map(g => g.unique_sources || 0);
-
-        const ctx = canvas.getContext('2d');
-        chartInstances.gatewayChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        label: 'Packets',
-                        data: packetCounts,
-                        backgroundColor: `${palette.primary}d9`,
-                        borderColor: palette.primary,
-                        borderWidth: 1.5,
-                        yAxisID: 'y'
-                    },
-                    {
-                        label: 'Unique Sources',
-                        data: uniqueSources,
-                        backgroundColor: `${palette.purple}cc`,
-                        borderColor: palette.purple,
-                        borderWidth: 1.5,
-                        yAxisID: 'y1'
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: 'top' } },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        title: { display: true, text: 'Packets' }
-                    },
-                    y1: {
-                        beginAtZero: true,
-                        position: 'right',
-                        grid: { drawOnChartArea: false },
-                        title: { display: true, text: 'Nodes' }
-                    }
+                if (utilData && utilData.error) {
+                    showError('utilizationChart', utilData.error);
+                } else {
+                    renderUtilizationChart(utilData || {});
                 }
-            }
-        });
-    }
 
-    function renderDeliveryChart(data) {
-        const canvas = document.getElementById('deliveryChart');
-        if (!canvas) {
-            console.error('deliveryChart canvas not found');
-            return;
-        }
-
-        if (typeof Chart === 'undefined') {
-            console.error('Chart.js is not available');
-            showError('deliveryChart', 'Chart.js library is not loaded');
-            return;
-        }
-
-        resetChartContainer(canvas);
-        if (chartInstances.deliveryChart) {
-            chartInstances.deliveryChart.destroy();
-        }
-
-        const breakdown = (data && data.hourly_breakdown) || [];
-        if (!breakdown.length) {
-            replaceChartWithMessage(canvas, 'No delivery data available');
-            return;
-        }
-
-        const sorted = breakdown.slice().sort((a, b) => a.hour - b.hour);
-        const sliceCount = Math.min(sorted.length, currentHours >= 24 ? 24 : currentHours);
-        const recent = sorted.slice(-sliceCount);
-
-        const labels = recent.map(d => `${String(d.hour).padStart(2, '0')}:00`);
-        const totals = recent.map(d => d.total_packets || 0);
-        const successRates = recent.map(d => Math.max(0, Math.min(100, d.success_rate || 0)));
-
-        const ctx = canvas.getContext('2d');
-        chartInstances.deliveryChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        type: 'bar',
-                        label: 'Packets',
-                        data: totals,
-                        backgroundColor: `${palette.success}b3`,
-                        borderColor: palette.success,
-                        borderWidth: 1.5,
-                        yAxisID: 'y'
-                    },
-                    {
-                        type: 'line',
-                        label: 'Success Rate (%)',
-                        data: successRates,
-                        borderColor: palette.primary,
-                        backgroundColor: `${palette.primary}33`,
-                        tension: 0.35,
-                        fill: false,
-                        yAxisID: 'y1'
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: { legend: { position: 'top' } },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        title: { display: true, text: 'Packets' }
-                    },
-                    y1: {
-                        beginAtZero: true,
-                        max: 100,
-                        position: 'right',
-                        grid: { drawOnChartArea: false },
-                        title: { display: true, text: 'Success Rate (%)' }
-                    }
+                if (packetTypesData && packetTypesData.error) {
+                    showError('packetTypesChart', packetTypesData.error);
+                } else {
+                    renderPacketTypesChart(packetTypesData || {});
                 }
+
+                if (channelsData && channelsData.error) {
+                    showError('channelsChart', channelsData.error);
+                } else {
+                    renderChannelsChart(channelsData || {});
+                }
+
+                if (healthData && healthData.error) {
+                    showError('networkOverview', healthData.error);
+                } else {
+                    renderNetworkHealth(healthData || {});
+                }
+
+                if (nodeNamingData && nodeNamingData.error) {
+                    console.error('Failed to load node naming stats:', nodeNamingData.error);
+                } else {
+                    renderNodeNamingStats(nodeNamingData || {});
+                }
+
+                if (Array.isArray(highlightedNodesData)) {
+                    renderHighlightedNodesTable('highlightedNodesTable', highlightedNodesData);
+                } else if (highlightedNodesData && highlightedNodesData.error) {
+                    showError('highlightedNodesTable', highlightedNodesData.error);
+                } else {
+                    renderHighlightedNodesTable('highlightedNodesTable', []);
+                }
+
+                if (gatewayData && gatewayData.error) {
+                    showError('gatewayChart', gatewayData.error);
+                } else {
+                    renderGatewayChart(gatewayData || {});
+                }
+
+                if (signalData && signalData.error) {
+                    showError('signalQualityChart', signalData.error);
+                } else {
+                    renderSignalQualityChart(signalData || {});
+                }
+
+                if (Array.isArray(signalNodesData)) {
+                    renderSignalNodesTable('signalNodesTable', signalNodesData);
+                } else if (signalNodesData && signalNodesData.error) {
+                    showError('signalNodesTable', signalNodesData.error);
+                } else {
+                    renderSignalNodesTable('signalNodesTable', []);
+                }
+
+                if (temporalData && temporalData.error) {
+                    showError('deliveryChart', temporalData.error);
+                } else {
+                    renderDeliveryChart(temporalData || {});
+                }
+
+                if (Array.isArray(topChannelUtilizersData)) {
+                    renderTopChannelUtilizersTable('topChannelUtilizersTable', topChannelUtilizersData);
+                } else if (topChannelUtilizersData && topChannelUtilizersData.error) {
+                    showError('topChannelUtilizersTable', topChannelUtilizersData.error);
+                } else {
+                    renderTopChannelUtilizersTable('topChannelUtilizersTable', []);
+                }
+
+                if (gatewayStatusData && gatewayStatusData.error) {
+                    showError('gatewayStatusTable', gatewayStatusData.error);
+                } else {
+                    renderGatewayStatusTable('gatewayStatusTable', gatewayStatusData || {});
+                }
+
+                // Handle telemetry data (arrays, not objects)
+                if (Array.isArray(batteryData)) {
+                    renderTelemetryChart('batteryChart', batteryData, 'Battery Level', '%', '#28a745');
+                } else if (batteryData && batteryData.error) {
+                    showError('batteryChart', batteryData.error);
+                } else {
+                    renderTelemetryChart('batteryChart', [], 'Battery Level', '%', '#28a745');
+                }
+
+                if (Array.isArray(humidityData)) {
+                    renderTelemetryChart('humidityChart', humidityData, 'Humidity', '%', '#0dcaf0');
+                } else if (humidityData && humidityData.error) {
+                    showError('humidityChart', humidityData.error);
+                } else {
+                    renderTelemetryChart('humidityChart', [], 'Humidity', '%', '#0dcaf0');
+                }
+
+                if (Array.isArray(voltageData)) {
+                    renderTelemetryChart('voltageChart', voltageData, 'Voltage', 'V', '#ffc107');
+                } else if (voltageData && voltageData.error) {
+                    showError('voltageChart', voltageData.error);
+                } else {
+                    renderTelemetryChart('voltageChart', [], 'Voltage', 'V', '#ffc107');
+                }
+            } catch (error) {
+                console.error('Error loading stats:', error);
+                [
+                    'hottestNodesTable',
+                    'coldestNodesTable',
+                    'utilizationChart',
+                    'packetTypesChart',
+                    'channelsChart',
+                    'gatewayChart',
+                    'signalQualityChart',
+                    'deliveryChart',
+                    'networkOverview',
+                    'batteryChart',
+                    'humidityChart',
+                    'voltageChart',
+                    'topChannelUtilizersTable',
+                    'gatewayStatusTable'
+                ].forEach(id => showError(id, 'Failed to load data. Please refresh the page.'));
             }
-        });
-    }
-
-    function renderSignalQualityChart(data) {
-        const canvas = document.getElementById('signalQualityChart');
-        if (!canvas) {
-            console.error('signalQualityChart canvas not found');
-            return;
         }
 
-        if (typeof Chart === 'undefined') {
-            console.error('Chart.js is not available');
-            showError('signalQualityChart', 'Chart.js library is not loaded');
-            return;
-        }
+        function renderTelemetryChart(canvasId, data, label, unit, color) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) {
+                console.error(`${canvasId} canvas not found`);
+                return;
+            }
 
-        resetChartContainer(canvas);
-        if (chartInstances.signalQualityChart) {
-            chartInstances.signalQualityChart.destroy();
-        }
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not available');
+                showError(canvasId, 'Chart.js library is not loaded');
+                return;
+            }
 
-        const labels = ['Excellent', 'Good', 'Fair', 'Poor'];
-        const rssi = data && data.rssi_distribution ? data.rssi_distribution : {};
-        const snr = data && data.snr_distribution ? data.snr_distribution : {};
-        const rssiData = labels.map(label => rssi[label.toLowerCase()] || 0);
-        const snrData = labels.map(label => snr[label.toLowerCase()] || 0);
+            resetChartContainer(canvas);
+            if (chartInstances[canvasId]) {
+                chartInstances[canvasId].destroy();
+            }
 
-        if (rssiData.every(v => v === 0) && snrData.every(v => v === 0)) {
-            replaceChartWithMessage(canvas, 'No signal samples available');
-            return;
-        }
+            if (!data || data.length === 0) {
+                replaceChartWithMessage(canvas, `No ${label.toLowerCase()} data available`);
+                return;
+            }
 
-        const ctx = canvas.getContext('2d');
-        chartInstances.signalQualityChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        label: 'RSSI samples',
-                        data: rssiData,
-                        backgroundColor: `${palette.info}c9`,
-                        borderColor: palette.info,
+            const labels = data.map(node => {
+                const name = node.display_name || node.name || `Node ${node.node_id || 'Unknown'}`;
+                return name.length > 15 ? name.substring(0, 15) + '...' : name;
+            });
+            const values = data.map(node => node.metric_value || 0);
+
+            const ctx = canvas.getContext('2d');
+            chartInstances[canvasId] = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: `${label} (${unit})`,
+                        data: values,
+                        backgroundColor: `${color}cc`,
+                        borderColor: color,
                         borderWidth: 1.5
-                    },
-                    {
-                        label: 'SNR samples',
-                        data: snrData,
-                        backgroundColor: `${palette.warning}c9`,
-                        borderColor: palette.warning,
-                        borderWidth: 1.5
-                    }
-                ]
-            },
-            options: {
-                indexAxis: 'y',
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    x: { beginAtZero: true, ticks: { precision: 0 } },
-                    y: { beginAtZero: true }
+                    }]
                 },
-                plugins: { legend: { position: 'bottom' } }
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => {
+                                    const value = context.parsed.x || 0;
+                                    return `${label}: ${value}${unit}`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            beginAtZero: true,
+                            title: { display: true, text: `${label} (${unit})` }
+                        },
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderPacketTypesChart(data) {
+            const canvas = document.getElementById('packetTypesChart');
+            if (!canvas) {
+                console.error('packetTypesChart canvas not found');
+                return;
             }
-        });
-    }
 
-    function renderNetworkHealth(data) {
-        const container = document.getElementById('networkOverview');
-        if (!container) return;
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not available');
+                showError('packetTypesChart', 'Chart.js library is not loaded');
+                return;
+            }
 
-        const uniqueNodes = data.unique_nodes || 0;
-        const totalPackets = data.total_packets || 0;
-        const avgRSSI = typeof data.avg_rssi === 'number' ? data.avg_rssi.toFixed(1) : 'N/A';
-        const avgSNR = typeof data.avg_snr === 'number' ? data.avg_snr.toFixed(2) : 'N/A';
-        const totalNodesMesh = data.total_nodes || 0;
-        const dataSentMiB = typeof data.data_sent_mib === 'number' ? data.data_sent_mib.toFixed(2) : '0.00';
-        const totalPacketsAllTime = data.total_packets_all_time || 0;
-        const dataSentMiBAllTime = typeof data.data_sent_mib_all_time === 'number'
-            ? data.data_sent_mib_all_time.toFixed(2)
-            : '0.00';
+            resetChartContainer(canvas);
+            if (chartInstances.packetTypesChart) {
+                chartInstances.packetTypesChart.destroy();
+            }
 
-        const uniqueNodesEl = document.getElementById('uniqueNodes');
-        const totalPacketsEl = document.getElementById('totalPackets');
-        const avgRSSIEl = document.getElementById('avgRSSI');
-        const avgSNREl = document.getElementById('avgSNR');
-        const totalNodesMeshEl = document.getElementById('totalNodesMesh');
-        const dataSentMiBEl = document.getElementById('dataSentMiB');
+            const packetTypes = Array.isArray(data) ? data : (data.packet_types || []);
+            if (!packetTypes.length) {
+                replaceChartWithMessage(canvas, 'No packet type data available');
+                return;
+            }
 
-        if (uniqueNodesEl) uniqueNodesEl.textContent = uniqueNodes.toLocaleString();
-        if (totalPacketsEl) totalPacketsEl.textContent = totalPackets.toLocaleString();
-        if (avgRSSIEl) avgRSSIEl.textContent = avgRSSI;
-        if (avgSNREl) avgSNREl.textContent = avgSNR;
-        if (totalNodesMeshEl) totalNodesMeshEl.textContent = totalNodesMesh.toLocaleString();
-        if (dataSentMiBEl) dataSentMiBEl.textContent = dataSentMiB;
+            const labels = packetTypes.map(pt => pt.portnum_name || 'Unknown');
+            const counts = packetTypes.map(pt => pt.count || 0);
+            const colors = [
+                palette.primary,
+                palette.success,
+                palette.info,
+                palette.warning,
+                palette.danger,
+                palette.gray,
+                '#20c997',
+                palette.purple,
+                '#fd7e14',
+                '#0dcaf0'
+            ];
 
-        container.innerHTML = `
+            const ctx = canvas.getContext('2d');
+            chartInstances.packetTypesChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels,
+                    datasets: [{
+                        data: counts,
+                        backgroundColor: colors.slice(0, labels.length),
+                        borderWidth: 2,
+                        borderColor: '#fff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'right' },
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => {
+                                    const label = context.label || '';
+                                    const value = context.parsed || 0;
+                                    const total = counts.reduce((a, b) => a + b, 0);
+                                    const pct = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                                    return `${label}: ${value} (${pct}%)`;
+                                }
+                            }
+                        }
+                    },
+                    onClick: async (event, elements) => {
+                        if (!elements || !elements.length) return;
+                        const idx = elements[0].index;
+                        const portnumName = labels[idx];
+                        if (!portnumName || portnumName === 'Unknown') return;
+
+                        try {
+                            const url = new URL('/api/stats/packet-types/nodes', window.location.origin);
+                            url.searchParams.set('portnum_name', portnumName);
+                            const hoursSelect = document.getElementById('timeRange');
+                            if (hoursSelect && hoursSelect.value) {
+                                url.searchParams.set('hours', hoursSelect.value);
+                            }
+
+                            const resp = await fetch(url.toString());
+                            if (!resp.ok) {
+                                throw new Error(`HTTP ${resp.status}`);
+                            }
+                            const nodes = await resp.json();
+                            renderNodeTable('hottestNodesTable', Array.isArray(nodes) ? nodes : []);
+                        } catch (err) {
+                            console.error('Failed to load nodes for packet type', portnumName, err);
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderChannelsChart(data) {
+            const canvas = document.getElementById('channelsChart');
+            if (!canvas) {
+                console.error('channelsChart canvas not found');
+                return;
+            }
+
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not available');
+                showError('channelsChart', 'Chart.js library is not loaded');
+                return;
+            }
+
+            resetChartContainer(canvas);
+            if (chartInstances.channelsChart) {
+                chartInstances.channelsChart.destroy();
+            }
+
+            const channels = (data && data.channels) || [];
+            if (!channels.length) {
+                replaceChartWithMessage(canvas, 'No channel data available');
+                return;
+            }
+
+            const labels = channels.map(c => c.channel_id || 'Unknown');
+            const packetCounts = channels.map(c => c.packet_count || 0);
+            const nodeCounts = channels.map(c => c.unique_nodes || 0);
+
+            const ctx = canvas.getContext('2d');
+            chartInstances.channelsChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Packets',
+                            data: packetCounts,
+                            backgroundColor: `${palette.primary}cc`,
+                            borderColor: palette.primary,
+                            borderWidth: 1.5,
+                            yAxisID: 'y'
+                        },
+                        {
+                            label: 'Unique Nodes',
+                            data: nodeCounts,
+                            backgroundColor: `${palette.success}cc`,
+                            borderColor: palette.success,
+                            borderWidth: 1.5,
+                            yAxisID: 'y1'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top' },
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Packets' }
+                        },
+                        y1: {
+                            beginAtZero: true,
+                            position: 'right',
+                            grid: { drawOnChartArea: false },
+                            title: { display: true, text: 'Nodes' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderGatewayChart(data) {
+            const canvas = document.getElementById('gatewayChart');
+            if (!canvas) {
+                console.error('gatewayChart canvas not found');
+                return;
+            }
+
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not available');
+                showError('gatewayChart', 'Chart.js library is not loaded');
+                return;
+            }
+
+            resetChartContainer(canvas);
+            if (chartInstances.gatewayChart) {
+                chartInstances.gatewayChart.destroy();
+            }
+
+            const gateways = (data && (data.gateway_distribution || data.gateways)) || [];
+            if (!gateways.length) {
+                replaceChartWithMessage(canvas, 'No gateway activity available');
+                return;
+            }
+
+            const topGateways = gateways.slice(0, 8);
+            const labels = topGateways.map(g => g.gateway_id || 'Unknown');
+            const packetCounts = topGateways.map(g => g.packet_count || 0);
+            const uniqueSources = topGateways.map(g => g.unique_sources || 0);
+
+            const ctx = canvas.getContext('2d');
+            chartInstances.gatewayChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'Packets',
+                            data: packetCounts,
+                            backgroundColor: `${palette.primary}d9`,
+                            borderColor: palette.primary,
+                            borderWidth: 1.5,
+                            yAxisID: 'y'
+                        },
+                        {
+                            label: 'Unique Sources',
+                            data: uniqueSources,
+                            backgroundColor: `${palette.purple}cc`,
+                            borderColor: palette.purple,
+                            borderWidth: 1.5,
+                            yAxisID: 'y1'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'top' } },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Packets' }
+                        },
+                        y1: {
+                            beginAtZero: true,
+                            position: 'right',
+                            grid: { drawOnChartArea: false },
+                            title: { display: true, text: 'Nodes' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderDeliveryChart(data) {
+            const canvas = document.getElementById('deliveryChart');
+            if (!canvas) {
+                console.error('deliveryChart canvas not found');
+                return;
+            }
+
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not available');
+                showError('deliveryChart', 'Chart.js library is not loaded');
+                return;
+            }
+
+            resetChartContainer(canvas);
+            if (chartInstances.deliveryChart) {
+                chartInstances.deliveryChart.destroy();
+            }
+
+            const breakdown = (data && data.hourly_breakdown) || [];
+            if (!breakdown.length) {
+                replaceChartWithMessage(canvas, 'No delivery data available');
+                return;
+            }
+
+            const sorted = breakdown.slice().sort((a, b) => a.hour - b.hour);
+            const sliceCount = Math.min(sorted.length, currentHours >= 24 ? 24 : currentHours);
+            const recent = sorted.slice(-sliceCount);
+
+            const labels = recent.map(d => `${String(d.hour).padStart(2, '0')}:00`);
+            const totals = recent.map(d => d.total_packets || 0);
+            const successRates = recent.map(d => Math.max(0, Math.min(100, d.success_rate || 0)));
+
+            const ctx = canvas.getContext('2d');
+            chartInstances.deliveryChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            type: 'bar',
+                            label: 'Packets',
+                            data: totals,
+                            backgroundColor: `${palette.success}b3`,
+                            borderColor: palette.success,
+                            borderWidth: 1.5,
+                            yAxisID: 'y'
+                        },
+                        {
+                            type: 'line',
+                            label: 'Success Rate (%)',
+                            data: successRates,
+                            borderColor: palette.primary,
+                            backgroundColor: `${palette.primary}33`,
+                            tension: 0.35,
+                            fill: false,
+                            yAxisID: 'y1'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: { legend: { position: 'top' } },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Packets' }
+                        },
+                        y1: {
+                            beginAtZero: true,
+                            max: 100,
+                            position: 'right',
+                            grid: { drawOnChartArea: false },
+                            title: { display: true, text: 'Success Rate (%)' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderSignalQualityChart(data) {
+            const canvas = document.getElementById('signalQualityChart');
+            if (!canvas) {
+                console.error('signalQualityChart canvas not found');
+                return;
+            }
+
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not available');
+                showError('signalQualityChart', 'Chart.js library is not loaded');
+                return;
+            }
+
+            resetChartContainer(canvas);
+            if (chartInstances.signalQualityChart) {
+                chartInstances.signalQualityChart.destroy();
+            }
+
+            const labels = ['Excellent', 'Good', 'Fair', 'Poor'];
+            const rssi = data && data.rssi_distribution ? data.rssi_distribution : {};
+            const snr = data && data.snr_distribution ? data.snr_distribution : {};
+            const rssiData = labels.map(label => rssi[label.toLowerCase()] || 0);
+            const snrData = labels.map(label => snr[label.toLowerCase()] || 0);
+
+            if (rssiData.every(v => v === 0) && snrData.every(v => v === 0)) {
+                replaceChartWithMessage(canvas, 'No signal samples available');
+                return;
+            }
+
+            const ctx = canvas.getContext('2d');
+            chartInstances.signalQualityChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'RSSI samples',
+                            data: rssiData,
+                            backgroundColor: `${palette.info}c9`,
+                            borderColor: palette.info,
+                            borderWidth: 1.5
+                        },
+                        {
+                            label: 'SNR samples',
+                            data: snrData,
+                            backgroundColor: `${palette.warning}c9`,
+                            borderColor: palette.warning,
+                            borderWidth: 1.5
+                        }
+                    ]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { beginAtZero: true, ticks: { precision: 0 } },
+                        y: { beginAtZero: true }
+                    },
+                    plugins: { legend: { position: 'bottom' } }
+                }
+            });
+        }
+
+        function renderNetworkHealth(data) {
+            const container = document.getElementById('networkOverview');
+            if (!container) return;
+
+            const uniqueNodes = data.unique_nodes || 0;
+            const totalPackets = data.total_packets || 0;
+            const avgRSSI = typeof data.avg_rssi === 'number' ? data.avg_rssi.toFixed(1) : 'N/A';
+            const avgSNR = typeof data.avg_snr === 'number' ? data.avg_snr.toFixed(2) : 'N/A';
+            const totalNodesMesh = data.total_nodes || 0;
+            const dataSentMiB = typeof data.data_sent_mib === 'number' ? data.data_sent_mib.toFixed(2) : '0.00';
+            const totalPacketsAllTime = data.total_packets_all_time || 0;
+            const dataSentMiBAllTime = typeof data.data_sent_mib_all_time === 'number'
+                ? data.data_sent_mib_all_time.toFixed(2)
+                : '0.00';
+
+            const uniqueNodesEl = document.getElementById('uniqueNodes');
+            const totalPacketsEl = document.getElementById('totalPackets');
+            const avgRSSIEl = document.getElementById('avgRSSI');
+            const avgSNREl = document.getElementById('avgSNR');
+            const totalNodesMeshEl = document.getElementById('totalNodesMesh');
+            const dataSentMiBEl = document.getElementById('dataSentMiB');
+
+            if (uniqueNodesEl) uniqueNodesEl.textContent = uniqueNodes.toLocaleString();
+            if (totalPacketsEl) totalPacketsEl.textContent = totalPackets.toLocaleString();
+            if (avgRSSIEl) avgRSSIEl.textContent = avgRSSI;
+            if (avgSNREl) avgSNREl.textContent = avgSNR;
+            if (totalNodesMeshEl) totalNodesMeshEl.textContent = totalNodesMesh.toLocaleString();
+            if (dataSentMiBEl) dataSentMiBEl.textContent = dataSentMiB;
+
+            container.innerHTML = `
             <div class="small text-body">
                 <div class="mb-1"><strong>Time Period:</strong> Last ${currentHours} hour${currentHours !== 1 ? 's' : ''}</div>
                 <div class="mb-1"><strong>Active Nodes (window):</strong> ${uniqueNodes.toLocaleString()}</div>
@@ -1229,119 +1230,119 @@
                 <div class="mb-1"><strong>Average Signal Quality:</strong> ${avgRSSI} dBm RSSI, ${avgSNR} dB SNR</div>
             </div>
         `;
-    }
-
-    function showError(elementId, message) {
-        const element = document.getElementById(elementId);
-        if (!element) return;
-
-        if (element.tagName === 'CANVAS') {
-            replaceChartWithMessage(element, message);
-            return;
         }
 
-        const tbody = element.querySelector ? element.querySelector('tbody') : null;
-        if (tbody) {
-            tbody.innerHTML = `<tr><td colspan="3" class="text-center py-4 text-danger">
+        function showError(elementId, message) {
+            const element = document.getElementById(elementId);
+            if (!element) return;
+
+            if (element.tagName === 'CANVAS') {
+                replaceChartWithMessage(element, message);
+                return;
+            }
+
+            const tbody = element.querySelector ? element.querySelector('tbody') : null;
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="3" class="text-center py-4 text-danger">
                 <i class="bi bi-exclamation-triangle me-2"></i>${message}
             </td></tr>`;
-            return;
-        }
-
-        element.innerHTML = `<div class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>${message}</div>`;
-    }
-
-    function replaceChartWithMessage(canvas, message) {
-        const container = canvas.closest('.chart-container') || canvas.parentElement;
-        if (container) {
-            let alert = container.querySelector('.chart-alert');
-            if (!alert) {
-                alert = document.createElement('div');
-                alert.className = 'alert alert-warning m-0 chart-alert';
-                container.appendChild(alert);
+                return;
             }
-            alert.innerHTML = `<i class="bi bi-exclamation-triangle me-2"></i>${message}`;
-            canvas.style.display = 'none';
-        }
-    }
 
-    function renderNodeNamingStats(data) {
-        const total = data.total_nodes ?? 0;
-        const custom = data.custom_named ?? 0;
-        const customPct = data.custom_named_pct ?? 0;
-
-        const customNamedNodesEl = document.getElementById('customNamedNodes');
-        const customNamedPctEl = document.getElementById('customNamedPct');
-
-        if (!customNamedNodesEl || !customNamedPctEl) return;
-
-        customNamedNodesEl.textContent = custom.toString();
-        if (total > 0) {
-            customNamedPctEl.textContent = `${customPct.toFixed(1)}% of ${total} nodes`;
-        } else {
-            customNamedPctEl.textContent = 'No nodes detected yet';
-        }
-    }
-
-    let highlightedNodesCache = [];
-
-    function renderHighlightedNodesTable(tableId, nodes) {
-        highlightedNodesCache = Array.isArray(nodes) ? nodes.slice() : [];
-
-        const select = document.getElementById('highlightMode');
-        const mode = select ? select.value : 'most_active';
-        const table = document.getElementById(tableId);
-        if (!table) return;
-        const tbody = table.querySelector('tbody');
-        if (!tbody) return;
-
-        tbody.innerHTML = '';
-
-        if (!highlightedNodesCache.length) {
-            tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No data available</td></tr>';
-            return;
+            element.innerHTML = `<div class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>${message}</div>`;
         }
 
-        // Sort a copy based on current mode
-        const sorted = highlightedNodesCache.slice();
-        if (mode === 'weak_signal') {
-            sorted.sort((a, b) => {
-                const ar = a.avg_rssi ?? 0;
-                const br = b.avg_rssi ?? 0;
-                return ar - br; // weakest (most negative) first
-            });
-        } else {
-            sorted.sort((a, b) => (b.packet_count || 0) - (a.packet_count || 0));
-        }
-
-        sorted.forEach(node => {
-            const tr = document.createElement('tr');
-
-            const displayName = node.display_name || node.long_name || node.short_name || `Node ${node.node_id || 'Unknown'}`;
-            const initials = displayName.substring(0, 2).toUpperCase();
-            const nodeId = node.node_id || node.id || '';
-            const packets = node.packet_count || 0;
-
-            let signalClass = 'text-muted';
-            let signalLabel = 'N/A';
-            if (node.avg_rssi !== null && node.avg_rssi !== undefined) {
-                const rssi = node.avg_rssi;
-                if (rssi > -70) {
-                    signalClass = 'text-success';
-                    signalLabel = 'Excellent';
-                } else if (rssi > -80) {
-                    signalClass = 'text-warning';
-                    signalLabel = 'Good';
-                } else if (rssi > -90) {
-                    signalClass = 'text-info';
-                    signalLabel = 'Fair';
-                } else {
-                    signalClass = 'text-danger';
-                    signalLabel = 'Poor';
+        function replaceChartWithMessage(canvas, message) {
+            const container = canvas.closest('.chart-container') || canvas.parentElement;
+            if (container) {
+                let alert = container.querySelector('.chart-alert');
+                if (!alert) {
+                    alert = document.createElement('div');
+                    alert.className = 'alert alert-warning m-0 chart-alert';
+                    container.appendChild(alert);
                 }
+                alert.innerHTML = `<i class="bi bi-exclamation-triangle me-2"></i>${message}`;
+                canvas.style.display = 'none';
+            }
+        }
+
+        function renderNodeNamingStats(data) {
+            const total = data.total_nodes ?? 0;
+            const custom = data.custom_named ?? 0;
+            const customPct = data.custom_named_pct ?? 0;
+
+            const customNamedNodesEl = document.getElementById('customNamedNodes');
+            const customNamedPctEl = document.getElementById('customNamedPct');
+
+            if (!customNamedNodesEl || !customNamedPctEl) return;
+
+            customNamedNodesEl.textContent = custom.toString();
+            if (total > 0) {
+                customNamedPctEl.textContent = `${customPct.toFixed(1)}% of ${total} nodes`;
+            } else {
+                customNamedPctEl.textContent = 'No nodes detected yet';
+            }
+        }
+
+        let highlightedNodesCache = [];
+
+        function renderHighlightedNodesTable(tableId, nodes) {
+            highlightedNodesCache = Array.isArray(nodes) ? nodes.slice() : [];
+
+            const select = document.getElementById('highlightMode');
+            const mode = select ? select.value : 'most_active';
+            const table = document.getElementById(tableId);
+            if (!table) return;
+            const tbody = table.querySelector('tbody');
+            if (!tbody) return;
+
+            tbody.innerHTML = '';
+
+            if (!highlightedNodesCache.length) {
+                tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No data available</td></tr>';
+                return;
             }
 
-            tr.innerHTML = `
+            // Sort a copy based on current mode
+            const sorted = highlightedNodesCache.slice();
+            if (mode === 'weak_signal') {
+                sorted.sort((a, b) => {
+                    const ar = a.avg_rssi ?? 0;
+                    const br = b.avg_rssi ?? 0;
+                    return ar - br; // weakest (most negative) first
+                });
+            } else {
+                sorted.sort((a, b) => (b.packet_count || 0) - (a.packet_count || 0));
+            }
+
+            sorted.forEach(node => {
+                const tr = document.createElement('tr');
+
+                const displayName = node.display_name || node.long_name || node.short_name || `Node ${node.node_id || 'Unknown'}`;
+                const initials = displayName.substring(0, 2).toUpperCase();
+                const nodeId = node.node_id || node.id || '';
+                const packets = node.packet_count || 0;
+
+                let signalClass = 'text-muted';
+                let signalLabel = 'N/A';
+                if (node.avg_rssi !== null && node.avg_rssi !== undefined) {
+                    const rssi = node.avg_rssi;
+                    if (rssi > -70) {
+                        signalClass = 'text-success';
+                        signalLabel = 'Excellent';
+                    } else if (rssi > -80) {
+                        signalClass = 'text-warning';
+                        signalLabel = 'Good';
+                    } else if (rssi > -90) {
+                        signalClass = 'text-info';
+                        signalLabel = 'Fair';
+                    } else {
+                        signalClass = 'text-danger';
+                        signalLabel = 'Poor';
+                    }
+                }
+
+                tr.innerHTML = `
                 <td>
                     <div class="d-flex align-items-center">
                         <div class="node-avatar me-2" style="background-color: ${stringToColor(String(nodeId))}">
@@ -1371,66 +1372,66 @@
                 </td>
             `;
 
-            tbody.appendChild(tr);
-        });
-    }
-
-    const highlightModeSelect = document.getElementById('highlightMode');
-    if (highlightModeSelect) {
-        highlightModeSelect.addEventListener('change', () => {
-            renderHighlightedNodesTable('highlightedNodesTable', highlightedNodesCache);
-        });
-    }
-
-    function renderSignalNodesTable(tableId, nodes) {
-        const table = document.getElementById(tableId);
-        if (!table) return;
-        const tbody = table.querySelector('tbody');
-        if (!tbody) return;
-
-        tbody.innerHTML = '';
-
-        if (!nodes || !nodes.length) {
-            tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No data available</td></tr>';
-            return;
+                tbody.appendChild(tr);
+            });
         }
 
-        nodes.forEach(node => {
-            const tr = document.createElement('tr');
+        const highlightModeSelect = document.getElementById('highlightMode');
+        if (highlightModeSelect) {
+            highlightModeSelect.addEventListener('change', () => {
+                renderHighlightedNodesTable('highlightedNodesTable', highlightedNodesCache);
+            });
+        }
 
-            const displayName = node.display_name || node.long_name || node.short_name || `Node ${node.node_id || 'Unknown'}`;
-            const initials = displayName.substring(0, 2).toUpperCase();
-            const nodeId = node.node_id || node.id || '';
-            const packets = node.packet_count || 0;
-            const rssi = node.avg_rssi;
-            const snr = node.avg_snr;
+        function renderSignalNodesTable(tableId, nodes) {
+            const table = document.getElementById(tableId);
+            if (!table) return;
+            const tbody = table.querySelector('tbody');
+            if (!tbody) return;
 
-            let signalClass = 'bg-secondary';
-            let signalLabel = 'N/A';
-            if (rssi !== null && rssi !== undefined) {
-                if (rssi > -70) {
-                    signalClass = 'bg-success';
-                    signalLabel = 'Excellent';
-                } else if (rssi > -80) {
-                    signalClass = 'bg-warning';
-                    signalLabel = 'Good';
-                } else if (rssi > -90) {
-                    signalClass = 'bg-info';
-                    signalLabel = 'Fair';
-                } else {
-                    signalClass = 'bg-danger';
-                    signalLabel = 'Poor';
+            tbody.innerHTML = '';
+
+            if (!nodes || !nodes.length) {
+                tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No data available</td></tr>';
+                return;
+            }
+
+            nodes.forEach(node => {
+                const tr = document.createElement('tr');
+
+                const displayName = node.display_name || node.long_name || node.short_name || `Node ${node.node_id || 'Unknown'}`;
+                const initials = displayName.substring(0, 2).toUpperCase();
+                const nodeId = node.node_id || node.id || '';
+                const packets = node.packet_count || 0;
+                const rssi = node.avg_rssi;
+                const snr = node.avg_snr;
+
+                let signalClass = 'bg-secondary';
+                let signalLabel = 'N/A';
+                if (rssi !== null && rssi !== undefined) {
+                    if (rssi > -70) {
+                        signalClass = 'bg-success';
+                        signalLabel = 'Excellent';
+                    } else if (rssi > -80) {
+                        signalClass = 'bg-warning';
+                        signalLabel = 'Good';
+                    } else if (rssi > -90) {
+                        signalClass = 'bg-info';
+                        signalLabel = 'Fair';
+                    } else {
+                        signalClass = 'bg-danger';
+                        signalLabel = 'Poor';
+                    }
                 }
-            }
 
-            // Map RSSI range (-120 to -60) into 0–100 gauge
-            let gaugeValue = 0;
-            if (rssi !== null && rssi !== undefined) {
-                const clamped = Math.max(-120, Math.min(-60, rssi));
-                gaugeValue = Math.round(((clamped + 120) / 60) * 100);
-            }
+                // Map RSSI range (-120 to -60) into 0–100 gauge
+                let gaugeValue = 0;
+                if (rssi !== null && rssi !== undefined) {
+                    const clamped = Math.max(-120, Math.min(-60, rssi));
+                    gaugeValue = Math.round(((clamped + 120) / 60) * 100);
+                }
 
-            tr.innerHTML = `
+                tr.innerHTML = `
                 <td>
                     <div class="d-flex align-items-center">
                         <div class="node-avatar me-2" style="background-color: ${stringToColor(String(nodeId))}">
@@ -1469,65 +1470,65 @@
                 </td>
             `;
 
-            tbody.appendChild(tr);
-        });
-    }
-
-    function resetChartContainer(canvas) {
-        const container = canvas.closest('.chart-container') || canvas.parentElement;
-        if (container) {
-            const alert = container.querySelector('.chart-alert');
-            if (alert) {
-                alert.remove();
-            }
-        }
-        canvas.style.display = 'block';
-    }
-
-    function renderNodeTable(tableId, nodes) {
-        const table = document.getElementById(tableId);
-        if (!table) return;
-        const tbody = table.querySelector('tbody');
-        if (!tbody) return;
-
-        tbody.innerHTML = '';
-
-        if (!nodes || nodes.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No data available</td></tr>';
-            return;
+                tbody.appendChild(tr);
+            });
         }
 
-        nodes.forEach(node => {
-            const tr = document.createElement('tr');
-
-            let lastSeen = 'Unknown';
-            if (node.last_seen) {
-                if (typeof node.last_seen === 'number') {
-                    lastSeen = moment.unix(node.last_seen).fromNow();
-                } else {
-                    lastSeen = moment(node.last_seen).fromNow();
+        function resetChartContainer(canvas) {
+            const container = canvas.closest('.chart-container') || canvas.parentElement;
+            if (container) {
+                const alert = container.querySelector('.chart-alert');
+                if (alert) {
+                    alert.remove();
                 }
             }
+            canvas.style.display = 'block';
+        }
 
-            const displayName = node.display_name || node.name || `Node ${node.node_id || 'Unknown'}`;
-            const initials = displayName.substring(0, 2).toUpperCase();
-            const nodeId = node.node_id || node.id || '';
+        function renderNodeTable(tableId, nodes) {
+            const table = document.getElementById(tableId);
+            if (!table) return;
+            const tbody = table.querySelector('tbody');
+            if (!tbody) return;
 
-            // Determine temperature badge color
-            let tempBadgeClass = 'bg-secondary';
-            if (node.temperature !== undefined) {
-                if (node.temperature >= 25) {
-                    tempBadgeClass = 'bg-danger';
-                } else if (node.temperature >= 15) {
-                    tempBadgeClass = 'bg-warning';
-                } else if (node.temperature >= 0) {
-                    tempBadgeClass = 'bg-info';
-                } else {
-                    tempBadgeClass = 'bg-primary';
-                }
+            tbody.innerHTML = '';
+
+            if (!nodes || nodes.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No data available</td></tr>';
+                return;
             }
 
-            tr.innerHTML = `
+            nodes.forEach(node => {
+                const tr = document.createElement('tr');
+
+                let lastSeen = 'Unknown';
+                if (node.last_seen) {
+                    if (typeof node.last_seen === 'number') {
+                        lastSeen = moment.unix(node.last_seen).fromNow();
+                    } else {
+                        lastSeen = moment(node.last_seen).fromNow();
+                    }
+                }
+
+                const displayName = node.display_name || node.name || `Node ${node.node_id || 'Unknown'}`;
+                const initials = displayName.substring(0, 2).toUpperCase();
+                const nodeId = node.node_id || node.id || '';
+
+                // Determine temperature badge color
+                let tempBadgeClass = 'bg-secondary';
+                if (node.temperature !== undefined) {
+                    if (node.temperature >= 25) {
+                        tempBadgeClass = 'bg-danger';
+                    } else if (node.temperature >= 15) {
+                        tempBadgeClass = 'bg-warning';
+                    } else if (node.temperature >= 0) {
+                        tempBadgeClass = 'bg-info';
+                    } else {
+                        tempBadgeClass = 'bg-primary';
+                    }
+                }
+
+                tr.innerHTML = `
                 <td>
                     <div class="d-flex align-items-center">
                         <div class="node-avatar me-2" style="background-color: ${stringToColor(String(nodeId))}">
@@ -1555,36 +1556,36 @@
                     ${lastSeen}
                 </td>
             `;
-            tbody.appendChild(tr);
-        });
-    }
-
-    function renderTopChannelUtilizersTable(tableId, nodes) {
-        const table = document.getElementById(tableId);
-        if (!table) return;
-        const tbody = table.querySelector('tbody');
-        if (!tbody) return;
-
-        tbody.innerHTML = '';
-
-        if (!nodes || nodes.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No data available</td></tr>';
-            return;
+                tbody.appendChild(tr);
+            });
         }
 
-        nodes.forEach(node => {
-            const tr = document.createElement('tr');
+        function renderTopChannelUtilizersTable(tableId, nodes) {
+            const table = document.getElementById(tableId);
+            if (!table) return;
+            const tbody = table.querySelector('tbody');
+            if (!tbody) return;
 
-            const displayName = node.display_name || node.long_name || node.short_name || `Node ${node.node_id || 'Unknown'}`;
-            const initials = displayName.substring(0, 2).toUpperCase();
-            const nodeId = node.node_id || node.id || '';
-            const channels = Array.isArray(node.channels) ? node.channels.filter(Boolean) : [];
-            const channelCount = node.channel_count || channels.length || 0;
-            const packetCount = node.packet_count || 0;
+            tbody.innerHTML = '';
 
-            const channelList = channels.length ? channels.join(', ') : 'N/A';
+            if (!nodes || nodes.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No data available</td></tr>';
+                return;
+            }
 
-            tr.innerHTML = `
+            nodes.forEach(node => {
+                const tr = document.createElement('tr');
+
+                const displayName = node.display_name || node.long_name || node.short_name || `Node ${node.node_id || 'Unknown'}`;
+                const initials = displayName.substring(0, 2).toUpperCase();
+                const nodeId = node.node_id || node.id || '';
+                const channels = Array.isArray(node.channels) ? node.channels.filter(Boolean) : [];
+                const channelCount = node.channel_count || channels.length || 0;
+                const packetCount = node.packet_count || 0;
+
+                const channelList = channels.length ? channels.join(', ') : 'N/A';
+
+                tr.innerHTML = `
                 <td>
                     <div class="d-flex align-items-center">
                         <div class="node-avatar me-2" style="background-color: ${stringToColor(String(nodeId))}">
@@ -1612,35 +1613,35 @@
                 </td>
             `;
 
-            tbody.appendChild(tr);
-        });
-    }
-
-    function renderGatewayStatusTable(tableId, data) {
-        const table = document.getElementById(tableId);
-        if (!table) return;
-        const tbody = table.querySelector('tbody');
-        if (!tbody) return;
-
-        tbody.innerHTML = '';
-
-        const gateways = Array.isArray(data.gateways) ? data.gateways : [];
-        if (!gateways.length) {
-            tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No gateway data available</td></tr>';
-            return;
+                tbody.appendChild(tr);
+            });
         }
 
-        gateways.forEach(gw => {
-            const tr = document.createElement('tr');
-            const gatewayId = gw.gateway_id || gw.id || 'Unknown';
-            const display = gatewayId;
-            const lastSeenStr = gw.last_seen_str || 'Unknown';
-            const online = !!gw.online;
+        function renderGatewayStatusTable(tableId, data) {
+            const table = document.getElementById(tableId);
+            if (!table) return;
+            const tbody = table.querySelector('tbody');
+            if (!tbody) return;
 
-            const badgeClass = online ? 'bg-success' : 'bg-secondary';
-            const badgeText = online ? 'Online' : 'Offline';
+            tbody.innerHTML = '';
 
-            tr.innerHTML = `
+            const gateways = Array.isArray(data.gateways) ? data.gateways : [];
+            if (!gateways.length) {
+                tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">No gateway data available</td></tr>';
+                return;
+            }
+
+            gateways.forEach(gw => {
+                const tr = document.createElement('tr');
+                const gatewayId = gw.gateway_id || gw.id || 'Unknown';
+                const display = gatewayId;
+                const lastSeenStr = gw.last_seen_str || 'Unknown';
+                const online = !!gw.online;
+
+                const badgeClass = online ? 'bg-success' : 'bg-secondary';
+                const badgeText = online ? 'Online' : 'Offline';
+
+                tr.innerHTML = `
                 <td>
                     <div class="d-flex align-items-center">
                         <span class="badge bg-dark me-2">${gatewayId}</span>
@@ -1657,372 +1658,372 @@
                 </td>
             `;
 
-            tbody.appendChild(tr);
-        });
-    }
-
-    function renderUtilizationChart(data) {
-        const canvas = document.getElementById('utilizationChart');
-        if (!canvas) {
-            console.error('Utilization chart canvas not found');
-            return;
+                tbody.appendChild(tr);
+            });
         }
 
-        if (typeof Chart === 'undefined') {
-            console.error('Chart.js is not available');
-            showError('utilizationChart', 'Chart.js library is not loaded');
-            return;
-        }
+        function renderUtilizationChart(data) {
+            const canvas = document.getElementById('utilizationChart');
+            if (!canvas) {
+                console.error('Utilization chart canvas not found');
+                return;
+            }
 
-        resetChartContainer(canvas);
-        if (chartInstances.utilizationChart) {
-            chartInstances.utilizationChart.destroy();
-        }
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not available');
+                showError('utilizationChart', 'Chart.js library is not loaded');
+                return;
+            }
 
-        const ctx = canvas.getContext('2d');
-        const hourlyData = data.hourly_utilization || [];
+            resetChartContainer(canvas);
+            if (chartInstances.utilizationChart) {
+                chartInstances.utilizationChart.destroy();
+            }
 
-        const labels = [];
-        const packetCounts = [];
-        const byteCounts = [];
+            const ctx = canvas.getContext('2d');
+            const hourlyData = data.hourly_utilization || [];
 
-        for (let i = 0; i < 24; i++) {
-            const hourData = hourlyData.find(d => d.hour === i);
-            labels.push(`${i}:00`);
-            packetCounts.push(hourData ? hourData.packet_count : 0);
-            byteCounts.push(hourData ? hourData.total_bytes : 0);
-        }
+            const labels = [];
+            const packetCounts = [];
+            const byteCounts = [];
 
-        chartInstances.utilizationChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [
-                    {
-                        label: 'Packets',
-                        data: packetCounts,
-                        borderColor: palette.primary,
-                        backgroundColor: `${palette.primary}1a`,
-                        yAxisID: 'y',
-                        tension: 0.4,
-                        fill: true
-                    },
-                    {
-                        label: 'Bytes',
-                        data: byteCounts,
-                        borderColor: palette.success,
-                        backgroundColor: `${palette.success}1a`,
-                        yAxisID: 'y1',
-                        tension: 0.4,
-                        fill: true
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: {
-                    mode: 'index',
-                    intersect: false,
-                },
-                plugins: {
-                    legend: {
-                        position: 'top',
-                    }
-                },
-                scales: {
-                    y: {
-                        type: 'linear',
-                        display: true,
-                        position: 'left',
-                        stacked: true,
-                        title: { display: true, text: 'Packets' }
-                    },
-                    y1: {
-                        type: 'linear',
-                        display: true,
-                        position: 'right',
-                        stacked: true,
-                        title: { display: true, text: 'Bytes' },
-                        grid: {
-                            drawOnChartArea: false,
+            for (let i = 0; i < 24; i++) {
+                const hourData = hourlyData.find(d => d.hour === i);
+                labels.push(`${i}:00`);
+                packetCounts.push(hourData ? hourData.packet_count : 0);
+                byteCounts.push(hourData ? hourData.total_bytes : 0);
+            }
+
+            chartInstances.utilizationChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Packets',
+                            data: packetCounts,
+                            borderColor: palette.primary,
+                            backgroundColor: `${palette.primary}1a`,
+                            yAxisID: 'y',
+                            tension: 0.4,
+                            fill: true
                         },
-                    }
-                }
-            }
-        });
-    }
-
-    function stringToColor(str) {
-        let hash = 0;
-        for (let i = 0; i < str.length; i++) {
-            hash = str.charCodeAt(i) + ((hash << 5) - hash);
-        }
-        const c = (hash & 0x00FFFFFF).toString(16).toUpperCase();
-        return '#' + '00000'.substring(0, 6 - c.length) + c;
-    }
-
-    function renderHopDistributionChart(data) {
-        const canvas = document.getElementById('hopDistributionChart');
-        if (!canvas) {
-            console.error('hopDistributionChart canvas not found');
-            return;
-        }
-
-        if (typeof Chart === 'undefined') {
-            console.error('Chart.js is not available');
-            showError('hopDistributionChart', 'Chart.js library is not loaded');
-            return;
-        }
-
-        resetChartContainer(canvas);
-        if (chartInstances.hopDistributionChart) {
-            chartInstances.hopDistributionChart.destroy();
-        }
-
-        const distribution = (data && data.distribution) || [];
-        const summary = (data && data.summary) || {};
-
-        if (!distribution.length) {
-            replaceChartWithMessage(canvas, 'No routing data available');
-            return;
-        }
-
-        const labels = distribution.map(d => `${d.hop_count || 0} hop${d.hop_count !== 1 ? 's' : ''}`);
-        const packetCounts = distribution.map(d => d.packet_count || 0);
-        const nodeCounts = distribution.map(d => d.unique_nodes || 0);
-
-        const ctx = canvas.getContext('2d');
-        chartInstances.hopDistributionChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        label: 'Packets',
-                        data: packetCounts,
-                        backgroundColor: `${palette.primary}cc`,
-                        borderColor: palette.primary,
-                        borderWidth: 1.5,
-                        yAxisID: 'y'
+                        {
+                            label: 'Bytes',
+                            data: byteCounts,
+                            borderColor: palette.success,
+                            backgroundColor: `${palette.success}1a`,
+                            yAxisID: 'y1',
+                            tension: 0.4,
+                            fill: true
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
                     },
-                    {
-                        label: 'Unique Nodes',
-                        data: nodeCounts,
-                        backgroundColor: `${palette.success}cc`,
-                        borderColor: palette.success,
-                        borderWidth: 1.5,
-                        yAxisID: 'y1'
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'top' },
-                    tooltip: {
-                        callbacks: {
-                            footer: (items) => {
-                                if (summary.avg_hops !== undefined) {
-                                    return `Avg: ${summary.avg_hops.toFixed(1)} hops | Direct: ${summary.direct_packets || 0} | Routed: ${summary.routed_packets || 0}`;
-                                }
-                                return '';
-                            }
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        }
+                    },
+                    scales: {
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            stacked: true,
+                            title: { display: true, text: 'Packets' }
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            stacked: true,
+                            title: { display: true, text: 'Bytes' },
+                            grid: {
+                                drawOnChartArea: false,
+                            },
                         }
                     }
+                }
+            });
+        }
+
+        function stringToColor(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                hash = str.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            const c = (hash & 0x00FFFFFF).toString(16).toUpperCase();
+            return '#' + '00000'.substring(0, 6 - c.length) + c;
+        }
+
+        function renderHopDistributionChart(data) {
+            const canvas = document.getElementById('hopDistributionChart');
+            if (!canvas) {
+                console.error('hopDistributionChart canvas not found');
+                return;
+            }
+
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not available');
+                showError('hopDistributionChart', 'Chart.js library is not loaded');
+                return;
+            }
+
+            resetChartContainer(canvas);
+            if (chartInstances.hopDistributionChart) {
+                chartInstances.hopDistributionChart.destroy();
+            }
+
+            const distribution = (data && data.distribution) || [];
+            const summary = (data && data.summary) || {};
+
+            if (!distribution.length) {
+                replaceChartWithMessage(canvas, 'No routing data available');
+                return;
+            }
+
+            const labels = distribution.map(d => `${d.hop_count || 0} hop${d.hop_count !== 1 ? 's' : ''}`);
+            const packetCounts = distribution.map(d => d.packet_count || 0);
+            const nodeCounts = distribution.map(d => d.unique_nodes || 0);
+
+            const ctx = canvas.getContext('2d');
+            chartInstances.hopDistributionChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'Packets',
+                            data: packetCounts,
+                            backgroundColor: `${palette.primary}cc`,
+                            borderColor: palette.primary,
+                            borderWidth: 1.5,
+                            yAxisID: 'y'
+                        },
+                        {
+                            label: 'Unique Nodes',
+                            data: nodeCounts,
+                            backgroundColor: `${palette.success}cc`,
+                            borderColor: palette.success,
+                            borderWidth: 1.5,
+                            yAxisID: 'y1'
+                        }
+                    ]
                 },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        title: { display: true, text: 'Packets' }
-                    },
-                    y1: {
-                        beginAtZero: true,
-                        position: 'right',
-                        grid: { drawOnChartArea: false },
-                        title: { display: true, text: 'Nodes' }
-                    }
-                }
-            }
-        });
-    }
-
-    function renderHardwareModelsChart(data) {
-        const canvas = document.getElementById('hardwareModelsChart');
-        if (!canvas) {
-            console.error('hardwareModelsChart canvas not found');
-            return;
-        }
-
-        if (typeof Chart === 'undefined') {
-            console.error('Chart.js is not available');
-            showError('hardwareModelsChart', 'Chart.js library is not loaded');
-            return;
-        }
-
-        resetChartContainer(canvas);
-        if (chartInstances.hardwareModelsChart) {
-            chartInstances.hardwareModelsChart.destroy();
-        }
-
-        if (!data || !data.length) {
-            replaceChartWithMessage(canvas, 'No hardware model data available');
-            return;
-        }
-
-        const topModels = data.slice(0, 10);
-        const labels = topModels.map(m => m.hw_model || 'Unknown');
-        const nodeCounts = topModels.map(m => m.unique_nodes || 0);
-        const packetCounts = topModels.map(m => m.packet_count || 0);
-
-        const ctx = canvas.getContext('2d');
-        chartInstances.hardwareModelsChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        label: 'Unique Nodes',
-                        data: nodeCounts,
-                        backgroundColor: `${palette.info}cc`,
-                        borderColor: palette.info,
-                        borderWidth: 1.5,
-                        yAxisID: 'y'
-                    },
-                    {
-                        label: 'Packets',
-                        data: packetCounts,
-                        backgroundColor: `${palette.warning}cc`,
-                        borderColor: palette.warning,
-                        borderWidth: 1.5,
-                        yAxisID: 'y1'
-                    }
-                ]
-            },
-            options: {
-                indexAxis: 'y',
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: 'top' } },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        title: { display: true, text: 'Nodes' }
-                    },
-                    y1: {
-                        beginAtZero: true,
-                        position: 'right',
-                        grid: { drawOnChartArea: false },
-                        title: { display: true, text: 'Packets' }
-                    }
-                }
-            }
-        });
-    }
-
-    function renderPeakHoursChart(data) {
-        const canvas = document.getElementById('peakHoursChart');
-        if (!canvas) {
-            console.error('peakHoursChart canvas not found');
-            return;
-        }
-
-        if (typeof Chart === 'undefined') {
-            console.error('Chart.js is not available');
-            showError('peakHoursChart', 'Chart.js library is not loaded');
-            return;
-        }
-
-        resetChartContainer(canvas);
-        if (chartInstances.peakHoursChart) {
-            chartInstances.peakHoursChart.destroy();
-        }
-
-        const hourlyData = (data && data.hourly_data) || [];
-        if (!hourlyData.length) {
-            replaceChartWithMessage(canvas, 'No hourly activity data available');
-            return;
-        }
-
-        // Fill in missing hours with 0
-        const hourMap = new Map();
-        hourlyData.forEach(h => {
-            hourMap.set(parseInt(h.hour), h);
-        });
-
-        const labels = [];
-        const packetCounts = [];
-        const nodeCounts = [];
-
-        for (let i = 0; i < 24; i++) {
-            labels.push(`${i}:00`);
-            const hourData = hourMap.get(i) || { packet_count: 0, unique_nodes: 0 };
-            packetCounts.push(hourData.packet_count || 0);
-            nodeCounts.push(hourData.unique_nodes || 0);
-        }
-
-        const ctx = canvas.getContext('2d');
-        chartInstances.peakHoursChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        label: 'Packets',
-                        data: packetCounts,
-                        borderColor: palette.primary,
-                        backgroundColor: `${palette.primary}1a`,
-                        tension: 0.4,
-                        fill: true,
-                        yAxisID: 'y'
-                    },
-                    {
-                        label: 'Active Nodes',
-                        data: nodeCounts,
-                        borderColor: palette.success,
-                        backgroundColor: `${palette.success}1a`,
-                        tension: 0.4,
-                        fill: true,
-                        yAxisID: 'y1'
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend: { position: 'top' },
-                    tooltip: {
-                        callbacks: {
-                            footer: (items) => {
-                                const peakHours = (data && data.peak_hours) || [];
-                                if (peakHours.length) {
-                                    const hours = peakHours.map(h => `${h.hour}:00`).join(', ');
-                                    return `Peak hours: ${hours}`;
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top' },
+                        tooltip: {
+                            callbacks: {
+                                footer: (items) => {
+                                    if (summary.avg_hops !== undefined) {
+                                        return `Avg: ${summary.avg_hops.toFixed(1)} hops | Direct: ${summary.direct_packets || 0} | Routed: ${summary.routed_packets || 0}`;
+                                    }
+                                    return '';
                                 }
-                                return '';
                             }
                         }
-                    }
-                },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        title: { display: true, text: 'Packets' }
                     },
-                    y1: {
-                        beginAtZero: true,
-                        position: 'right',
-                        grid: { drawOnChartArea: false },
-                        title: { display: true, text: 'Nodes' }
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Packets' }
+                        },
+                        y1: {
+                            beginAtZero: true,
+                            position: 'right',
+                            grid: { drawOnChartArea: false },
+                            title: { display: true, text: 'Nodes' }
+                        }
                     }
                 }
+            });
+        }
+
+        function renderHardwareModelsChart(data) {
+            const canvas = document.getElementById('hardwareModelsChart');
+            if (!canvas) {
+                console.error('hardwareModelsChart canvas not found');
+                return;
             }
-        });
-    }
-})();
+
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not available');
+                showError('hardwareModelsChart', 'Chart.js library is not loaded');
+                return;
+            }
+
+            resetChartContainer(canvas);
+            if (chartInstances.hardwareModelsChart) {
+                chartInstances.hardwareModelsChart.destroy();
+            }
+
+            if (!data || !data.length) {
+                replaceChartWithMessage(canvas, 'No hardware model data available');
+                return;
+            }
+
+            const topModels = data.slice(0, 10);
+            const labels = topModels.map(m => m.hw_model || 'Unknown');
+            const nodeCounts = topModels.map(m => m.unique_nodes || 0);
+            const packetCounts = topModels.map(m => m.packet_count || 0);
+
+            const ctx = canvas.getContext('2d');
+            chartInstances.hardwareModelsChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'Unique Nodes',
+                            data: nodeCounts,
+                            backgroundColor: `${palette.info}cc`,
+                            borderColor: palette.info,
+                            borderWidth: 1.5,
+                            yAxisID: 'y'
+                        },
+                        {
+                            label: 'Packets',
+                            data: packetCounts,
+                            backgroundColor: `${palette.warning}cc`,
+                            borderColor: palette.warning,
+                            borderWidth: 1.5,
+                            yAxisID: 'y1'
+                        }
+                    ]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'top' } },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Nodes' }
+                        },
+                        y1: {
+                            beginAtZero: true,
+                            position: 'right',
+                            grid: { drawOnChartArea: false },
+                            title: { display: true, text: 'Packets' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderPeakHoursChart(data) {
+            const canvas = document.getElementById('peakHoursChart');
+            if (!canvas) {
+                console.error('peakHoursChart canvas not found');
+                return;
+            }
+
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not available');
+                showError('peakHoursChart', 'Chart.js library is not loaded');
+                return;
+            }
+
+            resetChartContainer(canvas);
+            if (chartInstances.peakHoursChart) {
+                chartInstances.peakHoursChart.destroy();
+            }
+
+            const hourlyData = (data && data.hourly_data) || [];
+            if (!hourlyData.length) {
+                replaceChartWithMessage(canvas, 'No hourly activity data available');
+                return;
+            }
+
+            // Fill in missing hours with 0
+            const hourMap = new Map();
+            hourlyData.forEach(h => {
+                hourMap.set(parseInt(h.hour), h);
+            });
+
+            const labels = [];
+            const packetCounts = [];
+            const nodeCounts = [];
+
+            for (let i = 0; i < 24; i++) {
+                labels.push(`${i}:00`);
+                const hourData = hourMap.get(i) || { packet_count: 0, unique_nodes: 0 };
+                packetCounts.push(hourData.packet_count || 0);
+                nodeCounts.push(hourData.unique_nodes || 0);
+            }
+
+            const ctx = canvas.getContext('2d');
+            chartInstances.peakHoursChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'Packets',
+                            data: packetCounts,
+                            borderColor: palette.primary,
+                            backgroundColor: `${palette.primary}1a`,
+                            tension: 0.4,
+                            fill: true,
+                            yAxisID: 'y'
+                        },
+                        {
+                            label: 'Active Nodes',
+                            data: nodeCounts,
+                            borderColor: palette.success,
+                            backgroundColor: `${palette.success}1a`,
+                            tension: 0.4,
+                            fill: true,
+                            yAxisID: 'y1'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { position: 'top' },
+                        tooltip: {
+                            callbacks: {
+                                footer: (items) => {
+                                    const peakHours = (data && data.peak_hours) || [];
+                                    if (peakHours.length) {
+                                        const hours = peakHours.map(h => `${h.hour}:00`).join(', ');
+                                        return `Peak hours: ${hours}`;
+                                    }
+                                    return '';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Packets' }
+                        },
+                        y1: {
+                            beginAtZero: true,
+                            position: 'right',
+                            grid: { drawOnChartArea: false },
+                            title: { display: true, text: 'Nodes' }
+                        }
+                    }
+                }
+            });
+        }
+    })();
 </script>
 
 <style>
