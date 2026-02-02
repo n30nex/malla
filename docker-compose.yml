@@ -4,30 +4,22 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-meshtastic_history}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-    command: postgres -c max_connections=2000
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-MALLA_SUPER_PASSWORD_64_CHARS_MINIMO}
+    command: postgres -c max_connections=300
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    #ports:
+    #  - "${POSTGRES_PORT:-5436}:5432"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 10s
       timeout: 5s
       retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
 
   malla-web:
     build: .
-    image: malla:local
+    image: malla-n30nex:local
 
     # Choose between Flask dev server and Gunicorn
     # Default: Flask development server (malla-web)
@@ -35,7 +27,7 @@ services:
     command: ${MALLA_WEB_COMMAND:-/app/.venv/bin/malla-web}
 
     ports:
-      - "${MALLA_WEB_PORT:-5008}:5008"
+      - "${MALLA_WEB_PORT:-5023}:5008"
     environment:
       - MALLA_SERVICE_TYPE=web
       - MALLA_HOST=0.0.0.0
@@ -44,30 +36,26 @@ services:
       - MALLA_DATABASE_PORT=5432
       - MALLA_DATABASE_NAME=${POSTGRES_DB:-meshtastic_history}
       - MALLA_DATABASE_USER=${POSTGRES_USER:-postgres}
-      - MALLA_DATABASE_PASSWORD=${POSTGRES_PASSWORD:-postgres}
-      - MALLA_DB_POOL_MAX=500
+      - MALLA_DATABASE_PASSWORD=${POSTGRES_PASSWORD:-MALLA_SUPER_PASSWORD_64_CHARS_MINIMO}
+      - MALLA_DB_POOL_MAX=200
       - MALLA_NAME=${MALLA_NAME:-Malla}
-      - MALLA_SECRET_KEY=${MALLA_SECRET_KEY:-dev-secret-key-change-in-production}
+      - MALLA_SECRET_KEY=${MALLA_SECRET_KEY:-7c4973ea8c3035aef0f7eea56717f5af2838531445ba3f65f6f102db47d77fdf}
       - MALLA_DEBUG=${MALLA_DEBUG:-false}
     volumes:
       - malla_data:/app/data
       # Optional: mount your own config file (uncomment if you have one)
       # - ./config.yaml:/app/config.yaml:ro
     restart: unless-stopped
+    labels:
+      - autoheal=true
+
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5008/health').read()"]
+      #test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5008/', timeout=3).read()\""]
       interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
+      timeout: 30s
+      retries: 10
+      start_period: 60s
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,7 +63,7 @@ services:
         condition: service_started
 
   malla-capture:
-    image: malla:local
+    image: malla-n30nex:local
     command: ["/app/.venv/bin/malla-capture"]
     environment:
       - MALLA_SERVICE_TYPE=capture
@@ -84,7 +72,7 @@ services:
       - MALLA_DATABASE_NAME=${POSTGRES_DB:-meshtastic_history}
       - MALLA_DATABASE_USER=${POSTGRES_USER:-postgres}
       - MALLA_DATABASE_PASSWORD=${POSTGRES_PASSWORD:-postgres}
-      - MALLA_DB_POOL_MAX=500
+      - MALLA_DB_POOL_MAX=200
       # MQTT Configuration - set these in your .env file
       - MALLA_MQTT_BROKER_ADDRESS=${MALLA_MQTT_BROKER_ADDRESS}
       - MALLA_MQTT_PORT=${MALLA_MQTT_PORT:-1883}
@@ -109,14 +97,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 256M
     depends_on:
       postgres:
         condition: service_healthy

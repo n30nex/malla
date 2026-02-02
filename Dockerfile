@@ -7,7 +7,7 @@ ENV UV_LINK_MODE=copy
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV MALLA_HOST=0.0.0.0
-ENV MALLA_PORT=5008
+ENV MALLA_PORT=5108
 
 # Install the project into `/app`
 WORKDIR /app
@@ -35,7 +35,7 @@ RUN groupadd --gid 1000 app && \
     useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash app
 
 # Create data directory for database and set permissions
-RUN mkdir -p /app/data && chown -R app:app /app
+RUN mkdir -p /app/data && chown -R app:app /app/data
 
 # Switch to non-root user
 USER app
